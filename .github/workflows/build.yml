@@ -500,7 +500,10 @@ jobs:
           else:
               cmake.write_text(text.replace(
                   anchor,
-                  anchor + f'\n  target_compile_definitions(${{TARGET}} PRIVATE {define})',
+                  # Plain concatenation: an f-string would need doubled braces,
+                  # and the workflow parser reads that as an expression.
+                  anchor + '\n  target_compile_definitions(${TARGET} PRIVATE '
+                  + define + ')',
                   1))
               print(f'{cmake}: added {define}')
 
