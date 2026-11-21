@@ -26,6 +26,12 @@ class SettingsActions {
   Future<void> setThemeMode(ThemeMode mode) =>
       _ref.read(appDatabaseProvider).settingsDao.setThemeMode(mode);
 
+  Future<void> testAlarm() => _ref.read(alarmControllerProvider).ringTest();
+
+  Future<void> requestFullScreenAlarmPermission() => _ref
+      .read(notificationServiceProvider)
+      .requestFullScreenAlarmPermission();
+
   Future<void> requestNotificationPermission() async {
     await _ref.read(notificationServiceProvider).requestPermission();
     _ref.invalidate(notificationPermissionProvider);

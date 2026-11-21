@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -68,6 +70,29 @@ class SettingsScreen extends ConsumerWidget {
                 ),
               },
             ),
+          ),
+          if (Platform.isAndroid)
+            ListTile(
+              title: const Text('Allow alarm over lock screen'),
+              subtitle: const Text(
+                'Lets the alarm open full-screen like an alarm clock '
+                '(Android 14+ may require this)',
+              ),
+              trailing: const Icon(Icons.open_in_new),
+              onTap: () => ref
+                  .read(settingsActionsProvider)
+                  .requestFullScreenAlarmPermission(),
+            ),
+          ListTile(
+            title: const Text('Test alarm'),
+            subtitle: Text(
+              Platform.isAndroid
+                  ? 'Rings with your alarm-clock sound at alarm volume'
+                  : 'Rings while the app is open; volume follows the system '
+                        'volume',
+            ),
+            trailing: const Icon(Icons.alarm),
+            onTap: () => ref.read(settingsActionsProvider).testAlarm(),
           ),
           section('Data'),
           ListTile(

@@ -11,6 +11,11 @@ target. Offline-first, no account, no server.
   time and one or more shop offers (URLs).
 - The alarm fires when the cheapest successfully read offer is at or below the
   target — once, when the price crosses it, not every day.
+- **It rings like an alarm clock**: a looping alarm sound until you press
+  Stop (auto-stop after 10 minutes) and a full-screen alarm screen.
+  On Android it uses your alarm-clock sound at alarm-clock volume, also with
+  the app closed and over the lock screen. Settings → Test alarm lets you
+  hear it.
 
 **Price retrieval**
 - Prices are read from the schema.org structured data shops publish
@@ -28,13 +33,13 @@ target. Offline-first, no account, no server.
 
 ## Platforms
 
-| Platform | Artifact | Scheduled check | WebView fetch | Note |
-|---|---|---|---|---|
-| Android | `.apk` (debug + release) | background (WorkManager), may run minutes late | foreground only (see below) | release is debug-key-signed unless signing secrets are set |
-| iOS | `.zip` of `Runner.app` (debug + release) | when the app is opened | yes | **unsigned** — not installable without re-signing |
-| Linux | `.deb` amd64 (debug + release) | while the app runs / at next start | **no** | `flutter_inappwebview` has no stable Linux implementation |
-| macOS | `.zip` of `.app` (debug + release) | while the app runs / at next start | yes | ad-hoc signed, not Gatekeeper-verified |
-| Windows | `.zip` (debug + release) | while the app runs / at next start | yes | needs the WebView2 runtime (part of current Windows 10/11) |
+| Platform | Artifact | Scheduled check | Alarm | WebView fetch | Note |
+|---|---|---|---|---|---|
+| Android | `.apk` (debug + release) | background (WorkManager), may run minutes late | alarm-clock sound and volume, also with the app closed, full-screen over the lock screen | foreground only (see below) | release is debug-key-signed unless signing secrets are set |
+| iOS | `.zip` of `Runner.app` (debug + release) | when the app is opened | loop sound while the app is open (plays with the silent switch on); media volume | yes | **unsigned** — not installable without re-signing |
+| Linux | `.deb` amd64 (debug + release) | while the app runs / at next start | loop sound while the app runs; system volume | **no** | `flutter_inappwebview` has no stable Linux implementation |
+| macOS | `.zip` of `.app` (debug + release) | while the app runs / at next start | loop sound while the app runs; system volume | yes | ad-hoc signed, not Gatekeeper-verified |
+| Windows | `.zip` (debug + release) | while the app runs / at next start | loop sound while the app runs; system volume | yes | needs the WebView2 runtime (part of current Windows 10/11) |
 
 Android background runs use plain HTTP only. An item with an offer that needs
 the WebView (e.g. Galaxus) is checked at the next app start/resume instead.
@@ -48,6 +53,10 @@ the WebView (e.g. Galaxus) is checked at the next app start/resume instead.
 - Automated reading of shop pages may conflict with a shop's terms of use. The
   app loads each offer once per day; checking the terms is up to the user.
 - Offers in a currency other than the item's are shown but not compared.
+- On iOS the alarm cannot ring while the app is closed (no background check
+  in v0.1). On Android 14+, the full-screen alarm may need to be allowed once
+  in Settings → "Allow alarm over lock screen"; without it, it still rings as
+  a notification. The app never changes the system volume.
 
 ## Tech Stack
 
@@ -62,6 +71,7 @@ the WebView (e.g. Galaxus) is checked at the next app start/resume instead.
 | HTML / JSON-LD | html |
 | WebView | flutter_inappwebview (`HeadlessInAppWebView`) |
 | Notifications | flutter_local_notifications |
+| Alarm sound | audioplayers (bundled, self-generated WAV) |
 | Background (Android) | workmanager |
 | Backup | archive, file_picker, share_plus |
 

@@ -153,6 +153,8 @@ Behaviour:
 │   Theme          System ▾      │
 │ Notifications                  │
 │   Permission     Granted ✓     │
+│   Allow alarm over lock screen ↗│  (Android only)
+│   Test alarm               ⏰  │
 │ Data                           │
 │   Backup & restore         ›   │
 │ About                          │
@@ -166,6 +168,10 @@ Behaviour:
 Behaviour:
 - Permission row shows "Request" button when not granted; on desktop
   platforms where no permission exists, the row reads "Not required".
+- "Allow alarm over lock screen" (Android) opens the system page for
+  full-screen intents (REQUIREMENTS 5.3.7).
+- "Test alarm" rings exactly like a real alarm and opens the alarm screen
+  (§7); the subtitle states the platform's volume behaviour.
 
 ## 5. Backup & restore (`/settings/backup`)
 
@@ -182,15 +188,45 @@ Behaviour:
 - Logs: monospace scrollable view of the log file, newest at the bottom;
   actions Share and Clear (with confirmation).
 
-## 7. Notification
+## 7. Alarm (`/alarm/:itemId`) and notification
+
+Full screen, outside the navigation shell, error-container colours:
 
 ```
-PriceAlarm
-ASUS Radeon AI PRO R9700 — CHF 2'189.00 at Brack
-(target CHF 2'200.00)
+┌────────────────────────────────┐
+│                                │
+│              ⏰                │
+│          Price alarm           │
+│                                │
+│    ASUS Radeon AI PRO R9700    │
+│   CHF 2'149.00 at Galaxus      │
+│      Target CHF 2'200.00       │
+│                                │
+│  ┌──────────────────────────┐  │
+│  │        🔕  Stop          │  │
+│  └──────────────────────────┘  │
+│  [   Stop and show item    ]   │
+│                                │
+└────────────────────────────────┘
 ```
 
-Tap → opens `/items/:id`.
+Behaviour (REQUIREMENTS 5.3):
+- Opened automatically when an alarm starts ringing while the app runs, and
+  by a notification tap / full-screen launch over the lock screen (Android).
+- The sound loops until **Stop**, back navigation, or 10 minutes.
+- "Stop" returns to the previous screen; "Stop and show item" opens the item.
+  The test alarm has no "show item".
+- Launched from a notification after the app was closed, the details come
+  from the database (best known price), not from memory.
+
+Notification (Android, rings on its own with the alarm-clock sound):
+
+```
+Price alarm: ASUS Radeon AI PRO R9700
+CHF 2'149.00 at Galaxus (target CHF 2'200.00)      [Stop]
+```
+
+"Stop" silences without opening the app; a tap opens `/alarm/:itemId`.
 
 ## 8. Screen Flow Summary
 
@@ -198,7 +234,10 @@ Tap → opens `/items/:id`.
 Items list ──tap card──▶ Item detail ──✎──▶ Edit item
    │                        ▲                  │
    └──+──▶ New item ─save───┘◀──save───────────┘
-Notification ──tap──▶ Item detail
+Price reached ──rings──▶ Alarm ──Stop──▶ (previous screen)
+                                └─Stop and show item──▶ Item detail
+Notification ──tap / full-screen──▶ Alarm
+Settings ──Test alarm──▶ Alarm
 Settings ──▶ Backup & restore
          ──▶ About ──▶ Logs
          ──▶ Logs

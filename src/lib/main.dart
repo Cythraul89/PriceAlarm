@@ -9,6 +9,7 @@ import 'package:workmanager/workmanager.dart';
 import 'app.dart';
 import 'core/database/app_database.dart';
 import 'core/providers.dart';
+import 'core/services/alarm_sound.dart';
 import 'core/services/background_worker.dart';
 import 'core/services/http_page_fetcher.dart';
 import 'core/services/log_service.dart';
@@ -75,6 +76,9 @@ Future<void> _main() async {
     dio: HttpPageFetcher.createDio(appVersion: version),
     log: log,
   );
+  final AlarmSound alarmSound = AudioAlarmSound.isNeeded
+      ? AudioAlarmSound(log: log)
+      : const SilentAlarmSound();
   final webView = WebViewPageFetcher.isSupportedPlatform
       ? WebViewPageFetcher(log: log)
       : null;
@@ -86,6 +90,7 @@ Future<void> _main() async {
       notificationServiceProvider.overrideWithValue(notifications),
       httpPageFetcherProvider.overrideWithValue(http),
       webViewPageFetcherProvider.overrideWithValue(webView),
+      alarmSoundProvider.overrideWithValue(alarmSound),
       appVersionProvider.overrideWithValue(version),
     ],
   );
@@ -99,8 +104,15 @@ Future<void> _main() async {
 
   // ── Post-first-frame work ──────────────────────────────────────────────────
   WidgetsBinding.instance.addPostFrameCallback((_) async {
-    if (launchItemId != null) appRouter.go('/items/$launchItemId');
-    notifications.tappedItemIds.listen((id) => appRouter.go('/items/$id'));
+    // Notification tap or full-screen launch over the lock screen → the
+    // alarm screen, where the user stops the ringing (REQUIREMENTS 5.3.3).
+    // push, not go: "Stop" pops back to wherever the user was.
+    if (launchItemId != null) appRouter.push('/alarm/$launchItemId');
+    notifications.tappedItemIds.listen((id) => appRouter.push('/alarm/$id'));
+    container
+        .read(alarmControllerProvider)
+        .rings
+        .listen((alarm) => appRouter.push('/alarm/${alarm.itemId}'));
 
     final scheduler = container.read(schedulerServiceProvider);
     // Registers itself as a binding observer on construction and lives as

@@ -42,6 +42,9 @@ class _FakeNotifier implements AlarmNotifier {
     required String currency,
     required String shopName,
   }) async => alarms.add((itemName: itemName, price: price, shopName: shopName));
+
+  @override
+  Future<void> cancelAlarm(String itemId) async {}
 }
 
 const _brack = 'https://www.brack.ch/r9700';

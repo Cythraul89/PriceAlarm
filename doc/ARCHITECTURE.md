@@ -14,7 +14,8 @@ Status: v0.1 implemented · Last updated: 2026-11-21
 | HTTP fetch | `dio` | shared instance, timeouts per REQUIREMENTS 4.2 |
 | HTML parsing | `html` | only to locate `<script type="application/ld+json">` and `<meta>` tags |
 | WebView fetch | `flutter_inappwebview` (`HeadlessInAppWebView`) | Android, iOS, macOS, Windows; no Linux implementation in 6.1.x |
-| Notifications | `flutter_local_notifications` | |
+| Notifications | `flutter_local_notifications` | Android: alarm channel, alarm audio usage, insistent, full-screen intent |
+| Alarm sound | `audioplayers` | looping bundled WAV on iOS/desktop; Linux needs GStreamer |
 | Background (Android) | `workmanager` | one-off task re-enqueued per due time |
 | Backup | `archive`, `file_picker`, `share_plus` | |
 | About | `package_info_plus`, `url_launcher` | |
@@ -49,6 +50,8 @@ src/lib/
 │   │   ├── price_check_service.dart  orchestrates one run (see 5.2)
 │   │   ├── scheduler_service.dart    WorkManager / desktop timer / catch-up
 │   │   ├── background_worker.dart    WorkManager callbackDispatcher (Android)
+│   │   ├── alarm_controller.dart     rings: notification + sound + alarm-screen event
+│   │   ├── alarm_sound.dart          AlarmSound / AudioAlarmSound / SilentAlarmSound
 │   │   ├── notification_service.dart
 │   │   ├── backup_service.dart
 │   │   └── log_service.dart
@@ -59,6 +62,7 @@ src/lib/
 │   ├── item_detail/               item_detail_screen, item_detail_provider, widgets/
 │   ├── item_edit/                 item_edit_screen, widgets/offer_editor (no own provider:
 │   │                              reads DAOs once, writes via ItemActions)
+│   ├── alarm/                     alarm_screen (full screen, outside the shell)
 │   └── settings/                  settings_screen, about_screen, logs_screen,
 │                                  backup_screen, settings_provider
 └── shell/                         adaptive_shell, mobile_shell, desktop_shell
@@ -110,9 +114,12 @@ Providers that must be overridden in `main.dart` (each throws
 | `httpPageFetcherProvider` | `HttpPageFetcher(dio)` |
 | `webViewPageFetcherProvider` | `WebViewPageFetcher` or `null` where unsupported |
 | `appVersionProvider` | version string from `package_info_plus` |
+| `alarmSoundProvider` | `AudioAlarmSound` (iOS, desktop) or `SilentAlarmSound` (Android) |
 
-`priceCheckServiceProvider` and `schedulerServiceProvider` are plain
-`Provider`s composed from the above.
+`alarmControllerProvider`, `priceCheckServiceProvider` and
+`schedulerServiceProvider` are plain `Provider`s composed from the above. The
+price check service notifies through the `AlarmController` (app running);
+the Android worker notifies through `NotificationService` directly.
 
 ## 5. Price Check Pipeline
 
@@ -256,9 +263,27 @@ overwrite a valid status every day with a platform artefact.
 learn their `resolvedMethod` in the foreground, which the Android background
 run depends on (7.7).
 
+### 7.9 Alarm rings like an alarm clock
+**What:** on Android the notification itself is the alarm: alarm audio usage
+(alarm-clock volume), the system alarm-clock sound
+(`content://settings/system/alarm_alert`), `FLAG_INSISTENT` so it repeats until
+dismissed, category `alarm`, full-screen intent, 10-minute timeout. While the
+app runs, `AlarmController` adds the full-screen alarm screen and — on iOS and
+desktop only — a looping bundled sound (`audioplayers`).
+**Why:** only the notification can ring with the app closed, and the alarm
+stream is exactly the alarm-clock volume the user asked for. Playing the
+in-app sound on Android as well would double the sound.
+**Rejected:** a foreground service playing audio on Android — more
+permissions and Play policy questions for no gain over an insistent alarm
+notification. Changing the system volume — never done (REQUIREMENTS 5.3.5).
+**Constraint:** Android channel sound and usage are fixed once the channel
+exists; the channel id carries a version (`price_alarm_ring_v1`) to change
+them.
+
 ## 8. Navigation Map
 
 ```
+/alarm/:itemId                           AlarmScreen (full screen, outside the shell)
 StatefulShellRoute.indexedStack
 ├── branch 0: /items                     ItemsScreen
 │   ├── /items/new                       ItemEditScreen (create)
@@ -270,7 +295,9 @@ StatefulShellRoute.indexedStack
     └── /settings/logs                   LogsScreen
 ```
 
-Notification payload = item id; a tap navigates to `/items/:id`.
+Notification payload = item id; a tap or full-screen launch pushes
+`/alarm/:itemId`. A ringing in-app alarm pushes the same route, so "Stop"
+pops back to the previous screen.
 
 ## 9. Testing
 
@@ -284,10 +311,13 @@ Notification payload = item id; a tap navigates to `/items/:id`.
 | `runPriceChecks` | unit | fake fetchers + in-memory DB: escalation order, no escalation on network error, alarm fire/re-arm, history rows |
 | Shell | widget | renders with overridden providers; bottom nav < 600 dp, rail ≥ 600 dp |
 | Utils | unit | shop name, URL validation, formatters, backup file name |
+| `AlarmController` | unit | ring/stop, auto-stop, replace, notification failure, test alarm |
+| `AlarmScreen` | widget | Stop silences, cancels the notification once, pops back |
 
 What is not tested automatically: `WebViewPageFetcher` (needs a real platform
 WebView), `SchedulerService` and the WorkManager worker, notification
-delivery and taps, `BackupService` ZIP handling (the underlying
+delivery and taps, the actual loudness/looping of the Android alarm channel
+and of `AudioAlarmSound` (device test — use Settings → Test alarm), `BackupService` ZIP handling (the underlying
 `exportAll`/`importAll` is tested), DST behaviour, the screens beyond the
 shell smoke test, and the live shop pages (fixtures only; CI never contacts
 Galaxus or Brack).

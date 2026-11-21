@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:decimal/decimal.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../utils/formatters.dart';
 import 'log_service.dart';
+import 'alarm_controller.dart' show kAlarmRingDuration;
 import 'price_check_service.dart';
 
 /// Permission state as far as the platform can report it.
@@ -21,7 +23,19 @@ class NotificationService implements AlarmNotifier {
   /// Item ids of tapped notifications, for navigation.
   Stream<String> get tappedItemIds => _taps.stream;
 
-  static const _channelId = 'price_alarms';
+  // Android channel settings (sound, audio usage) are immutable once the
+  // channel exists on a device — change the id when changing them.
+  static const _channelId = 'price_alarm_ring_v1';
+
+  // Settings.System.DEFAULT_ALARM_ALERT_URI: the alarm-clock sound the user
+  // picked in the system settings.
+  static const _androidAlarmSound = UriAndroidNotificationSound(
+    'content://settings/system/alarm_alert',
+  );
+
+  // Notification.FLAG_INSISTENT: repeat the sound until the notification is
+  // cancelled or dismissed — what makes it ring like an alarm clock.
+  static const _flagInsistent = 4;
 
   // Fixed identity for Windows toast notifications; must never change, or
   // Windows treats it as a different app.
@@ -52,6 +66,9 @@ class NotificationService implements AlarmNotifier {
         ),
       ),
       onDidReceiveNotificationResponse: (response) {
+        // "Stop" only silences (the action cancels the notification); it
+        // must not open the app.
+        if (response.actionId == _stopActionId) return;
         final payload = response.payload;
         if (payload != null && payload.isNotEmpty) _taps.add(payload);
       },
@@ -110,6 +127,25 @@ class NotificationService implements AlarmNotifier {
     return null;
   }
 
+  /// Android 14+ may revoke full-screen intents for apps that are not
+  /// alarm clocks; this opens the system page where the user can allow it.
+  Future<void> requestFullScreenAlarmPermission() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.requestFullScreenIntentPermission();
+    } catch (e, st) {
+      log.error('Full-screen intent permission request failed', e, st);
+    }
+  }
+
+  /// Rings like an alarm clock on Android (REQUIREMENTS 5.3): alarm stream
+  /// and alarm-clock sound, repeating until cancelled, full-screen over the
+  /// lock screen. On other platforms this is a plain notification; the loop
+  /// sound comes from `AlarmSound` while the app runs.
   @override
   Future<void> showAlarm({
     required String itemId,
@@ -120,21 +156,44 @@ class NotificationService implements AlarmNotifier {
     required String shopName,
   }) => _plugin.show(
     id: _notificationId(itemId),
-    title: itemName,
+    title: 'Price alarm: $itemName',
     body:
         '${formatMoney(price, currency)} at $shopName '
         '(target ${formatMoney(targetPrice, currency)})',
-    notificationDetails: const NotificationDetails(
+    notificationDetails: NotificationDetails(
       android: AndroidNotificationDetails(
         _channelId,
-        'Price alarms',
-        channelDescription: 'A watched price reached its target',
-        importance: Importance.high,
-        priority: Priority.high,
+        'Price alarm (rings)',
+        channelDescription:
+            'Rings like an alarm clock when a price reaches its target',
+        importance: Importance.max,
+        priority: Priority.max,
+        category: AndroidNotificationCategory.alarm,
+        audioAttributesUsage: AudioAttributesUsage.alarm,
+        sound: _androidAlarmSound,
+        additionalFlags: Int32List.fromList([_flagInsistent]),
+        vibrationPattern: Int64List.fromList([0, 800, 400, 800, 400, 800]),
+        fullScreenIntent: true,
+        visibility: NotificationVisibility.public,
+        timeoutAfter: kAlarmRingDuration.inMilliseconds,
+        autoCancel: true,
+        actions: const [
+          AndroidNotificationAction(
+            _stopActionId,
+            'Stop',
+            cancelNotification: true,
+          ),
+        ],
       ),
     ),
     payload: itemId,
   );
+
+  @override
+  Future<void> cancelAlarm(String itemId) =>
+      _plugin.cancel(id: _notificationId(itemId));
+
+  static const _stopActionId = 'stop';
 
   /// Stable across runs and isolates (unlike `String.hashCode`), so a new
   /// alarm for the same item replaces the old notification.

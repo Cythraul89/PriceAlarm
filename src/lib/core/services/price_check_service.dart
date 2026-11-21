@@ -10,7 +10,8 @@ import 'log_service.dart';
 import 'page_fetcher.dart';
 import 'price_extractor.dart';
 
-/// Receives alarm notifications; implemented by `NotificationService`.
+/// Raises and silences alarms; implemented by `NotificationService`
+/// (background) and `AlarmController` (app running).
 abstract interface class AlarmNotifier {
   Future<void> showAlarm({
     required String itemId,
@@ -20,6 +21,8 @@ abstract interface class AlarmNotifier {
     required String currency,
     required String shopName,
   });
+
+  Future<void> cancelAlarm(String itemId);
 }
 
 const kHistoryRetention = Duration(days: 365);

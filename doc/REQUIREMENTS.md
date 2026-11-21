@@ -166,8 +166,31 @@ responsible for checking the terms of the shops they add.
 5. A run in which no offer is `ok` leaves `alarmActive` unchanged and raises
    no alarm. The failure is visible on the item (see 6.1); no notification in
    v0.1.
-6. Notification content: item name, best price with currency, shop name.
-   Tapping it opens the item detail screen.
+6. When the alarm fires, it **rings like an alarm clock** (5.3). Content:
+   item name, best price with currency, shop name, target price.
+
+### 5.3 Alarm ringing
+
+1. The alarm plays a looping alarm sound until the user presses **Stop**, or
+   automatically stops after **10 minutes** (`kAlarmRingDuration`). No snooze.
+2. While it rings, a full-screen **alarm screen** shows item, best price,
+   shop and target, with the buttons **Stop** and **Show item**.
+3. Tapping the notification, or a full-screen launch over the lock screen,
+   opens the alarm screen.
+4. Per platform:
+
+| Platform | Sound and volume | When it can ring |
+|---|---|---|
+| Android | The device's **default alarm-clock sound** on the **alarm audio stream** — the same volume as the alarm clock; plays in silent/vibrate mode; passes Do Not Disturb as long as "Alarms" are allowed there (Android default). Notification category `alarm`, sound repeats until dismissed (`FLAG_INSISTENT`), vibration, full-screen intent over the lock screen. | Also with the app closed (background run). |
+| iOS | Bundled alarm sound in a loop, audio session `playback` (ignores the silent switch while the app is open). Volume = device media volume. | Only while the app is open — iOS gives v0.1 no background run, and a sound that breaks through silent mode with the app closed needs Apple's Critical Alerts entitlement or AlarmKit (planned, see §10). |
+| macOS, Windows, Linux | Bundled alarm sound in a loop at full player volume, bounded by the system volume. System notification in addition. | While the app is running (checks only run then). |
+
+5. The app never changes the system volume.
+6. **Settings → Test alarm** rings exactly like a real alarm, so the user can
+   check sound and volume.
+7. Android 14+ may restrict full-screen alarms; Settings offers
+   **Allow alarm over lock screen**, which opens the system permission page.
+   Without it the alarm still rings as a heads-up notification.
 
 ## 6. Functional Requirements
 
@@ -197,10 +220,12 @@ responsible for checking the terms of the shops they add.
 ### 6.4 Settings
 
 1. Theme: system / light / dark.
-2. Notifications: shows the permission state and a button to request it.
-3. Backup: export all data to a ZIP file and import it (replace all data).
-4. About: version, licence (GPL-3.0), privacy notice, link to logs.
-5. Logs: view, share and clear the app log file.
+2. Notifications: shows the permission state and a button to request it;
+   on Android also "Allow alarm over lock screen" (5.3.7).
+3. Test alarm (5.3.6).
+4. Backup: export all data to a ZIP file and import it (replace all data).
+5. About: version, licence (GPL-3.0), privacy notice, link to logs.
+6. Logs: view, share and clear the app log file.
 
 ## 7. Platforms
 
@@ -238,6 +263,10 @@ in the README.
 - Notification when all offers of an item fail
 - Price history chart
 - iOS background refresh (`BGAppRefreshTask`)
+- iOS alarm with the app closed: needs a background check first (above);
+  then AlarmKit (iOS 26+, breaks through silent mode and Focus) could ring
+  the result, or the Critical Alerts entitlement (requires Apple approval)
+- Bring the desktop window to the front when the alarm rings
 - Desktop tray / autostart so desktop checks run without the window open
 - Currency conversion for foreign-currency offers
 - Optional WebDAV/Nextcloud backup
