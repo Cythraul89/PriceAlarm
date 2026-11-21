@@ -38,7 +38,8 @@ flutter test                    # must pass
 
 1. Edit or add the table under `lib/core/database/tables/`.
 2. Bump `schemaVersion` in `app_database.dart` and add the `if (from < N)`
-   step to an `onUpgrade` in the `MigrationStrategy`.
+   step to `onUpgrade` in the `MigrationStrategy`; dump the previous schema
+   into `test/fixtures/` and extend `test/database/migration_test.dart`.
 3. `dart run build_runner build`.
 4. Extend `test/database/daos_test.dart`.
 5. If the backup shape changes, bump `BackupService.kFormatVersion`.

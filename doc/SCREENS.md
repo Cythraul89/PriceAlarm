@@ -38,6 +38,8 @@ height follows content so large system fonts cannot overflow), rail on the
 left.
 
 Behaviour:
+- Android without exact alarms: a banner above the list ("Checks may run late
+  while the phone is idle…", [Allow]).
 - Card tap → Item detail. FAB `+` → Add item.
 - `⟳` runs all enabled items now (progress indicator in the app bar while
   running).
@@ -138,8 +140,8 @@ Behaviour:
   WebView, `webview` is disabled with a tooltip.
 - `[Test]` runs one check without saving and shows the result inline
   (price, currency, availability, mode, or the failure reason).
-- Changing the target price re-arms the alarm (REQUIREMENTS 5.2.4); the form
-  says so under the field when the alarm is active.
+- Changing the target price clears the ring state, so the new target may
+  ring in the current cycle (REQUIREMENTS 5.2.4).
 - Delete item → confirmation dialog → back to the list.
 - Unsaved changes + ✕ → "Discard changes?" dialog.
 
@@ -153,6 +155,9 @@ Behaviour:
 │   Theme          System ▾      │
 │ Notifications                  │
 │   Permission     Granted ✓     │
+│   Exact check time  Allowed ✓  │  (Android only)
+│   Allow alarm over lock screen ↗│  (Android only)
+│   Test alarm               ⏰  │
 │ Data                           │
 │   Backup & restore         ›   │
 │ About                          │
@@ -166,6 +171,12 @@ Behaviour:
 Behaviour:
 - Permission row shows "Request" button when not granted; on desktop
   platforms where no permission exists, the row reads "Not required".
+- "Exact check time" (Android): state of "Alarms & reminders"; "Allow" opens
+  the system page. The state is re-read when the app resumes.
+- "Allow alarm over lock screen" (Android) opens the system page for
+  full-screen intents (REQUIREMENTS 5.3.7).
+- "Test alarm" rings exactly like a real alarm and opens the alarm screen
+  (§7); the subtitle states the platform's volume behaviour.
 
 ## 5. Backup & restore (`/settings/backup`)
 
@@ -182,15 +193,45 @@ Behaviour:
 - Logs: monospace scrollable view of the log file, newest at the bottom;
   actions Share and Clear (with confirmation).
 
-## 7. Notification
+## 7. Alarm (`/alarm/:itemId`) and notification
+
+Full screen, outside the navigation shell, error-container colours:
 
 ```
-PriceAlarm
-ASUS Radeon AI PRO R9700 — CHF 2'189.00 at Brack
-(target CHF 2'200.00)
+┌────────────────────────────────┐
+│                                │
+│              ⏰                │
+│          Price alarm           │
+│                                │
+│    ASUS Radeon AI PRO R9700    │
+│   CHF 2'149.00 at Galaxus      │
+│      Target CHF 2'200.00       │
+│                                │
+│  ┌──────────────────────────┐  │
+│  │        🔕  Stop          │  │
+│  └──────────────────────────┘  │
+│  [   Stop and show item    ]   │
+│                                │
+└────────────────────────────────┘
 ```
 
-Tap → opens `/items/:id`.
+Behaviour (REQUIREMENTS 5.3):
+- Opened automatically when an alarm starts ringing while the app runs, and
+  by a notification tap / full-screen launch over the lock screen (Android).
+- The sound loops until **Stop**, back navigation, or 10 minutes.
+- "Stop" returns to the previous screen; "Stop and show item" opens the item.
+  The test alarm has no "show item".
+- Launched from a notification after the app was closed, the details come
+  from the database (best known price), not from memory.
+
+Notification (Android, rings on its own with the alarm-clock sound):
+
+```
+Price alarm: ASUS Radeon AI PRO R9700
+CHF 2'149.00 at Galaxus (target CHF 2'200.00)      [Stop]
+```
+
+"Stop" silences without opening the app; a tap opens `/alarm/:itemId`.
 
 ## 8. Screen Flow Summary
 
@@ -198,7 +239,10 @@ Tap → opens `/items/:id`.
 Items list ──tap card──▶ Item detail ──✎──▶ Edit item
    │                        ▲                  │
    └──+──▶ New item ─save───┘◀──save───────────┘
-Notification ──tap──▶ Item detail
+Price reached ──rings──▶ Alarm ──Stop──▶ (previous screen)
+                                └─Stop and show item──▶ Item detail
+Notification ──tap / full-screen──▶ Alarm
+Settings ──Test alarm──▶ Alarm
 Settings ──▶ Backup & restore
          ──▶ About ──▶ Logs
          ──▶ Logs

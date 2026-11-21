@@ -2,20 +2,21 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:workmanager/workmanager.dart';
+import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 
 import 'app.dart';
 import 'core/database/app_database.dart';
 import 'core/providers.dart';
-import 'core/services/background_worker.dart';
+import 'core/services/alarm_sound.dart';
 import 'core/services/http_page_fetcher.dart';
 import 'core/services/log_service.dart';
 import 'core/services/notification_service.dart';
 import 'core/services/webview_page_fetcher.dart';
 import 'core/utils/app_version.dart';
 import 'features/settings/about_screen.dart';
+import 'features/settings/settings_provider.dart';
 
 LogService? _log;
 
@@ -54,9 +55,9 @@ Future<void> _main() async {
   // ── Optional subsystems — a failure must not block startup ─────────────────
   if (Platform.isAndroid) {
     try {
-      await Workmanager().initialize(callbackDispatcher);
+      await AndroidAlarmManager.initialize();
     } catch (e, st) {
-      log.error('WorkManager init failed', e, st);
+      log.error('Alarm manager init failed', e, st);
     }
   }
 
@@ -75,6 +76,9 @@ Future<void> _main() async {
     dio: HttpPageFetcher.createDio(appVersion: version),
     log: log,
   );
+  final AlarmSound alarmSound = AudioAlarmSound.isNeeded
+      ? AudioAlarmSound(log: log)
+      : const SilentAlarmSound();
   final webView = WebViewPageFetcher.isSupportedPlatform
       ? WebViewPageFetcher(log: log)
       : null;
@@ -86,6 +90,7 @@ Future<void> _main() async {
       notificationServiceProvider.overrideWithValue(notifications),
       httpPageFetcherProvider.overrideWithValue(http),
       webViewPageFetcherProvider.overrideWithValue(webView),
+      alarmSoundProvider.overrideWithValue(alarmSound),
       appVersionProvider.overrideWithValue(version),
     ],
   );
@@ -99,14 +104,26 @@ Future<void> _main() async {
 
   // ── Post-first-frame work ──────────────────────────────────────────────────
   WidgetsBinding.instance.addPostFrameCallback((_) async {
-    if (launchItemId != null) appRouter.go('/items/$launchItemId');
-    notifications.tappedItemIds.listen((id) => appRouter.go('/items/$id'));
+    // Notification tap or full-screen launch over the lock screen → the
+    // alarm screen, where the user stops the ringing (REQUIREMENTS 5.3.3).
+    // push, not go: "Stop" pops back to wherever the user was.
+    if (launchItemId != null) appRouter.push('/alarm/$launchItemId');
+    notifications.tappedItemIds.listen((id) => appRouter.push('/alarm/$id'));
+    container
+        .read(alarmControllerProvider)
+        .rings
+        .listen((alarm) => appRouter.push('/alarm/${alarm.itemId}'));
 
     final scheduler = container.read(schedulerServiceProvider);
     // Registers itself as a binding observer on construction and lives as
     // long as the app.
     AppLifecycleListener(
-      onResume: () => unawaited(scheduler.catchUpAndReschedule()),
+      onResume: () {
+        // The user may come back from the "Alarms & reminders" page; the
+        // reschedule below then uses the new permission state.
+        container.invalidate(exactAlarmPermissionProvider);
+        unawaited(scheduler.catchUpAndReschedule());
+      },
     );
     if (Platform.isAndroid) await notifications.requestPermission();
     await scheduler.catchUpAndReschedule();

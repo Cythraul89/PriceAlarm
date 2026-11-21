@@ -49,7 +49,7 @@ jobs:
       - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
@@ -82,15 +82,60 @@ jobs:
 
       # INTERNET: release builds do not get it from the Flutter template.
       # POST_NOTIFICATIONS: price alarms on Android 13+.
-      - name: Patch AndroidManifest (permissions)
+      # USE_FULL_SCREEN_INTENT + showWhenLocked/turnScreenOn on MainActivity:
+      # the ringing alarm opens full-screen over the lock screen like an alarm
+      # clock (flutter_local_notifications README, "Full-screen intent").
+      # android_alarm_manager_plus (exact daily check in Doze) ships no manifest
+      # entries: its service and receivers plus RECEIVE_BOOT_COMPLETED, WAKE_LOCK
+      # and SCHEDULE_EXACT_ALARM are added here (plugin README, "Usage").
+      - name: Patch AndroidManifest (permissions, lock-screen alarm, alarm manager)
         shell: python3 {0}
         run: |
           path = 'android/app/src/main/AndroidManifest.xml'
           with open(path) as f:
               content = f.read()
+          activity = 'android:name=".MainActivity"'
+          if activity not in content:
+              raise SystemExit('MainActivity not found — template changed?')
+          if 'android:showWhenLocked' not in content:
+              content = content.replace(
+                  activity,
+                  activity + '\n            android:showWhenLocked="true"'
+                  '\n            android:turnScreenOn="true"',
+                  1,
+              )
+              print('Added showWhenLocked/turnScreenOn to MainActivity')
+          alarm_pkg = 'dev.fluttercommunity.plus.androidalarmmanager'
+          if alarm_pkg not in content:
+              components = (
+                  f'        <service\n'
+                  f'            android:name="{alarm_pkg}.AlarmService"\n'
+                  f'            android:permission="android.permission.BIND_JOB_SERVICE"\n'
+                  f'            android:exported="false"/>\n'
+                  f'        <receiver\n'
+                  f'            android:name="{alarm_pkg}.AlarmBroadcastReceiver"\n'
+                  f'            android:exported="false"/>\n'
+                  f'        <receiver\n'
+                  f'            android:name="{alarm_pkg}.RebootBroadcastReceiver"\n'
+                  f'            android:enabled="false"\n'
+                  f'            android:exported="false">\n'
+                  f'            <intent-filter>\n'
+                  f'                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n'
+                  f'            </intent-filter>\n'
+                  f'        </receiver>\n'
+              )
+              if '    </application>' not in content:
+                  raise SystemExit('</application> not found — template changed?')
+              content = content.replace(
+                  '    </application>', components + '    </application>', 1)
+              print('Added android_alarm_manager_plus service and receivers')
           for perm in [
               'android.permission.INTERNET',
               'android.permission.POST_NOTIFICATIONS',
+              'android.permission.USE_FULL_SCREEN_INTENT',
+              'android.permission.RECEIVE_BOOT_COMPLETED',
+              'android.permission.WAKE_LOCK',
+              'android.permission.SCHEDULE_EXACT_ALARM',
           ]:
               if perm not in content:
                   content = content.replace(
@@ -102,19 +147,21 @@ jobs:
           with open(path, 'w') as f:
               f.write(content)
 
-      # compileSdk 36 is required by flutter_plugin_android_lifecycle; core library
-      # desugaring is required by flutter_local_notifications (any version >= 10).
-      # NOTE: the WorkManagerInitializer is deliberately NOT removed — workmanager
-      # 0.10.x calls WorkManager.getInstance() and relies on the default
-      # initializer (see CLAUDE.md, Platform traps).
+      # compileSdk 37: flutter_local_notifications 23 and androidx.core 1.19 declare
+      # minCompileSdk 37 in their AAR metadata (checkDebugAarMetadata fails on 36,
+      # seen in CI). compileSdk only selects the API to compile against; minSdk and
+      # targetSdk stay Flutter's defaults. Core library desugaring is required by
+      # flutter_local_notifications (any version >= 10).
       - name: Patch build.gradle.kts (compileSdk, desugaring)
         shell: python3 {0}
         run: |
           path = 'android/app/build.gradle.kts'
           with open(path) as f:
               content = f.read()
+          if 'compileSdk = flutter.compileSdkVersion' not in content:
+              raise SystemExit('compileSdk line not found — Flutter template changed?')
           content = content.replace(
-              'compileSdk = flutter.compileSdkVersion', 'compileSdk = 36', 1)
+              'compileSdk = flutter.compileSdkVersion', 'compileSdk = 37', 1)
           content = content.replace(
               'compileOptions {',
               'compileOptions {\n        isCoreLibraryDesugaringEnabled = true', 1)
@@ -277,7 +324,9 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang cmake ninja-build libgtk-3-dev dpkg-dev
+          # GStreamer: audioplayers_linux plays the alarm sound through it.
+          sudo apt-get install -y clang cmake ninja-build libgtk-3-dev dpkg-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
@@ -319,7 +368,7 @@ jobs:
             > "$PKG/usr/share/applications/price-alarm.desktop"
 
           INSTALLED_SIZE=$(du -sk "$PKG/usr" | cut -f1)
-          printf 'Package: price-alarm\nVersion: %s\nArchitecture: %s\nMaintainer: PriceAlarm contributors\nInstalled-Size: %s\nDepends: libgtk-3-0\nSection: utils\nPriority: optional\nDescription: Daily shop price checks with target-price alarms\n PriceAlarm reads product prices from shop pages once a day and raises a\n local notification when a target price is reached.\n' \
+          printf 'Package: price-alarm\nVersion: %s\nArchitecture: %s\nMaintainer: PriceAlarm contributors\nInstalled-Size: %s\nDepends: libgtk-3-0, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, gstreamer1.0-plugins-good\nSection: utils\nPriority: optional\nDescription: Daily shop price checks with target-price alarms\n PriceAlarm reads product prices from shop pages once a day and raises a\n local notification when a target price is reached.\n' \
             "$DEB_VERSION" "$ARCH" "$INSTALLED_SIZE" > "$PKG/DEBIAN/control"
 
           dpkg-deb --root-owner-group --build "$PKG" \
@@ -426,6 +475,38 @@ jobs:
       - run: dart run build_runner build
       - name: Scaffold Windows platform
         run: flutter create --platforms=windows .
+
+      # flutter_inappwebview_windows 0.6.0 (and 0.7.0-beta.3) builds C++/WinRT
+      # code as C++17, which pulls in <experimental/coroutine>. MSVC 14.52
+      # (Visual Studio 18 on windows-latest) turns that into error STL1011.
+      # Microsoft's documented stop-gap is the define below, applied to this
+      # plugin target only. Temporary: Microsoft will remove the header; the
+      # real fix is upstream (C++20 coroutines). See CLAUDE.md, Platform traps.
+      - name: Patch flutter_inappwebview_windows for MSVC STL1011
+        shell: python
+        run: |
+          import json, pathlib, urllib.parse, urllib.request
+          config = json.loads(pathlib.Path('.dart_tool/package_config.json').read_text())
+          pkg = next(p for p in config['packages'] if p['name'] == 'flutter_inappwebview_windows')
+          root = pathlib.Path(urllib.request.url2pathname(urllib.parse.urlparse(pkg['rootUri']).path))
+          cmake = root / 'windows' / 'CMakeLists.txt'
+          text = cmake.read_text()
+          define = '_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS'
+          anchor = 'target_compile_features(${TARGET} PUBLIC cxx_std_17)'
+          if define in text:
+              print(f'{cmake}: already patched')
+          elif anchor not in text:
+              print(f'{cmake}: no C++17 anchor (fixed upstream?) — remove this step')
+          else:
+              cmake.write_text(text.replace(
+                  anchor,
+                  # Plain concatenation: an f-string would need doubled braces,
+                  # and the workflow parser reads that as an expression.
+                  anchor + '\n  target_compile_definitions(${TARGET} PRIVATE '
+                  + define + ')',
+                  1))
+              print(f'{cmake}: added {define}')
+
       - name: Build Windows (${{ matrix.mode }}) and zip
         run: |
           flutter build windows --${{ matrix.mode }} `

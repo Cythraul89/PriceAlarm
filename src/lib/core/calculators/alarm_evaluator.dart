@@ -12,10 +12,10 @@ class AlarmDecision extends Equatable {
     this.bestShop,
   });
 
-  /// New value of `Item.alarmActive`.
+  /// New value of `Item.alarmActive` (price at/below target — display).
   final bool active;
 
-  /// Raise a notification now (false → true transition only).
+  /// Ring now.
   final bool fire;
 
   /// Lowest comparable price of this run; `null` when no offer was usable.
@@ -28,10 +28,21 @@ class AlarmDecision extends Equatable {
 
 /// Implements REQUIREMENTS 5.2 — the "price at or below target" trigger.
 abstract final class AlarmEvaluator {
+  /// Rings at every daily cycle in which a check finds the best price at or
+  /// below the target — at most once per cycle, whichever check of the
+  /// cycle (scheduled, catch-up, manual) finds it first.
+  ///
+  /// [cycleStart] is the latest due instant of the item; [lastAlarmAt] the
+  /// last ring. [complete] is false when the run skipped offers (Android
+  /// background run without WebView): then the result may fire, but cannot
+  /// clear `active`, because a skipped offer may still be below the target.
   static AlarmDecision evaluate({
     required Decimal targetPrice,
     required String currency,
     required bool wasActive,
+    required DateTime? lastAlarmAt,
+    required DateTime cycleStart,
+    required bool complete,
     required List<({String shopName, CheckOutcome outcome})> results,
   }) {
     Decimal? best;
@@ -49,15 +60,16 @@ abstract final class AlarmEvaluator {
       }
     }
 
-    // No usable price: keep the state so an outage neither fires nor
-    // silently re-arms the alarm.
+    // No usable price: keep the state; an outage never rings.
     if (best == null) {
       return AlarmDecision(active: wasActive, fire: false);
     }
-    final active = best <= targetPrice;
+    final reached = best <= targetPrice;
+    final rangThisCycle =
+        lastAlarmAt != null && !lastAlarmAt.isBefore(cycleStart);
     return AlarmDecision(
-      active: active,
-      fire: active && !wasActive,
+      active: complete ? reached : (wasActive || reached),
+      fire: reached && !rangThisCycle,
       bestPrice: best,
       bestShop: bestShop,
     );

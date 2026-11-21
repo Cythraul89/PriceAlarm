@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -245,7 +245,8 @@ class _Summary extends StatelessWidget {
   static String? _platformHint() {
     if (Platform.isIOS) return 'On iOS, checks run when you open the app.';
     if (Platform.isAndroid) {
-      return 'Android may run the check a few minutes late.';
+      return 'Runs on time with "Exact check time" allowed in Settings; '
+          'otherwise Android may run it several minutes late.';
     }
     return 'Checks run while the app is open, or at the next start.';
   }

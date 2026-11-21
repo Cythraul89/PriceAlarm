@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'database/app_database.dart';
+import 'services/alarm_controller.dart';
+import 'services/alarm_sound.dart';
 import 'services/backup_service.dart';
 import 'services/log_service.dart';
 import 'services/notification_service.dart';
@@ -38,18 +40,34 @@ final webViewPageFetcherProvider = Provider<PageFetcher?>(
   ),
 );
 
+/// `SilentAlarmSound` on Android, where the notification rings itself.
+final alarmSoundProvider = Provider<AlarmSound>(
+  (ref) => throw UnimplementedError('alarmSoundProvider must be overridden'),
+);
+
 final appVersionProvider = Provider<String>(
   (ref) => throw UnimplementedError('appVersionProvider must be overridden'),
 );
 
 // ── Composed services ───────────────────────────────────────────────────────
 
+final alarmControllerProvider = Provider<AlarmController>((ref) {
+  final controller = AlarmController(
+    notifications: ref.watch(notificationServiceProvider),
+    sound: ref.watch(alarmSoundProvider),
+    log: ref.watch(logServiceProvider),
+  );
+  ref.onDispose(controller.dispose);
+  return controller;
+});
+
 final priceCheckServiceProvider = Provider<PriceCheckService>(
   (ref) => PriceCheckService(
     db: ref.watch(appDatabaseProvider),
     http: ref.watch(httpPageFetcherProvider),
     webView: ref.watch(webViewPageFetcherProvider),
-    notifier: ref.watch(notificationServiceProvider),
+    // The controller rings in-app on top of the notification.
+    notifier: ref.watch(alarmControllerProvider),
     log: ref.watch(logServiceProvider),
   ),
 );
@@ -59,6 +77,7 @@ final schedulerServiceProvider = Provider<SchedulerService>((ref) {
     db: ref.watch(appDatabaseProvider),
     checks: ref.watch(priceCheckServiceProvider),
     log: ref.watch(logServiceProvider),
+    exactAlarmsAllowed: ref.watch(notificationServiceProvider).canScheduleExactAlarms,
   );
   ref.onDispose(scheduler.dispose);
   return scheduler;

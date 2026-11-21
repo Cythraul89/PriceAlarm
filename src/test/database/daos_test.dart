@@ -1,6 +1,6 @@
 import 'package:decimal/decimal.dart';
 import 'package:drift/native.dart';
-import 'package:flutter/material.dart' show ThemeMode;
+import 'package:material_ui/material_ui.dart' show ThemeMode;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:price_alarm/core/database/app_database.dart';
 import 'package:price_alarm/core/models/check_outcome.dart';
@@ -58,9 +58,15 @@ void main() {
       expect(offers.map((o) => o.shopName), unorderedEquals(['Brack', 'Galaxus']));
     });
 
-    test('changing the target price re-arms an active alarm', () async {
+    test('changing the target price clears the alarm state, so it may ring '
+        'again in the same cycle', () async {
       final id = await db.itemsDao.saveDraft(_draft(), now: now);
-      await db.itemsDao.recordRun(id, alarmActive: true, lastRunAt: now);
+      await db.itemsDao.recordRun(
+        id,
+        alarmActive: true,
+        lastRunAt: now,
+        lastAlarmAt: now,
+      );
       final offers = await db.offersDao.getByItem(id);
       final keep = [
         for (final o in offers)
@@ -76,13 +82,17 @@ void main() {
         _draft(id: id, target: '2000', offers: keep),
         now: now,
       );
-      expect((await db.itemsDao.findById(id))?.alarmActive, isTrue);
+      final unchanged = await db.itemsDao.findById(id);
+      expect(unchanged?.alarmActive, isTrue);
+      expect(unchanged?.lastAlarmAt, isNotNull);
 
       await db.itemsDao.saveDraft(
         _draft(id: id, target: '1900', offers: keep),
         now: now,
       );
-      expect((await db.itemsDao.findById(id))?.alarmActive, isFalse);
+      final changed = await db.itemsDao.findById(id);
+      expect(changed?.alarmActive, isFalse);
+      expect(changed?.lastAlarmAt, isNull);
     });
 
     test('a changed offer URL clears that offer\'s last-check data, '
