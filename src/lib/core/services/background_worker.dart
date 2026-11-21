@@ -10,6 +10,7 @@ import 'http_page_fetcher.dart';
 import 'log_service.dart';
 import 'notification_service.dart';
 import 'price_check_service.dart';
+import 'webview_page_fetcher.dart';
 
 /// Id of the single Android alarm that triggers the next price run.
 /// Scheduling with the same id replaces the pending alarm.
@@ -77,10 +78,10 @@ Future<void> priceRunCallback() async {
       db: db,
       items: ScheduleCalculator.dueItems(items, DateTime.now()),
       http: http,
-      // A headless WebView in this isolate is unproven (REQUIREMENTS R3):
-      // WebView offers are left for the next foreground catch-up, the
-      // item's HTTP offers are checked and may ring.
-      webView: null,
+      // A headless WebView in this isolate is unproven on every device
+      // (REQUIREMENTS R3): it is tried, and a WebView offer that fails here
+      // stays due for the next foreground catch-up (deferWebViewOffers).
+      webView: WebViewPageFetcher(log: log),
       notifier: notifications,
       log: log,
       clock: DateTime.now,

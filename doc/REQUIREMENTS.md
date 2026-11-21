@@ -167,8 +167,8 @@ responsible for checking the terms of the shops they add.
    in the current cycle. `alarmActive` (the bell on the item) shows whether
    the last check found the condition true.
 5. A run in which no offer is `ok` leaves `alarmActive` unchanged and does
-   not ring. A run that checked only some offers (Android background, WebView
-   offers deferred) may ring, but cannot clear `alarmActive`. The failure is visible on the item (see 6.1); no notification in
+   not ring. A run that checked only some offers (Android background, a
+   WebView offer deferred) may ring, but cannot clear `alarmActive`. The failure is visible on the item (see 6.1); no notification in
    v0.1.
 6. When the alarm fires, it **rings like an alarm clock** (5.3). Content:
    item name, best price with currency, shop name, target price.
@@ -257,7 +257,7 @@ in the README.
 |---|---|---|
 | R1 | Galaxus may block the WebView as well, or may not expose JSON-LD. | **Resolved 2026-11-21 (device test):** with the WebView, Galaxus delivers structured data (CHF 2'276.00, InStock); plain HTTP stays blocked (403). |
 | R2 | `flutter_inappwebview` Linux support. | **Resolved 2026-11-21:** the stable 6.1.5 line has no Linux implementation. Linux reports `webview` offers as `unsupported` (or keeps `blocked` with the reason under `auto`); stated in the README. |
-| R3 | A headless WebView inside the Android background isolate is not proven (upstream issue #1348 reported a broken platform channel). | **Fallback implemented:** the background run checks an item's HTTP offers (they may ring) and leaves offers that need the WebView due; they are checked at the next foreground catch-up. A device test may later allow the WebView in the background. |
+| R3 | A headless WebView inside the Android background isolate is not proven (upstream issue #1348 reported a broken platform channel). | **Tried with fallback:** the background run also loads WebView offers in a headless WebView (the plugin uses the application context without an Activity). A WebView offer that fails there is not recorded and stays due for the next foreground catch-up; HTTP offers are checked either way and may ring. Device verification pending. |
 | R4 | Shops change their markup. | Extraction relies on schema.org data, not on CSS selectors; a failure shows up as `noPrice`, never as a wrong price. |
 
 ## 10. Planned Features

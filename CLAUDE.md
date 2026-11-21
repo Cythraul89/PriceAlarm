@@ -197,10 +197,13 @@ Providers that **must be overridden** at startup (each throws otherwise):
 - **No headless WebView on Linux.** `flutter_inappwebview` 6.1.x has no Linux
   implementation; `WebViewPageFetcher.isSupportedPlatform` guards it and Linux
   reports `webview` offers as `unsupported`.
-- **No WebView in the Android background isolate (yet).** Unproven
-  (REQUIREMENTS R3, upstream issue #1348). The alarm callback passes
-  `webView: null` and `deferWebViewOffers: true`: HTTP offers are checked (and
-  may ring), WebView offers stay due for the foreground catch-up.
+- **WebView in the Android background isolate is tried, not trusted.**
+  Unproven on devices (REQUIREMENTS R3, upstream issue #1348). The plugin
+  falls back to the application context when no Activity exists, so the
+  alarm callback passes a `WebViewPageFetcher` with `deferWebViewOffers:
+  true`: a WebView offer that fails there is *not recorded* and stays due for
+  the foreground catch-up (recording the failure would hide it). The log line
+  `deferred, background WebView …` means the fallback was used.
 - **Android notification channels are immutable.** Sound, audio usage and
   importance cannot change once `price_alarm_ring_v1` exists on a device.
   Changing them needs a new channel id (`_v2`), otherwise existing installs

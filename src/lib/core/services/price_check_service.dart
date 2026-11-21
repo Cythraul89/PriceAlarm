@@ -137,11 +137,13 @@ enum RunScope {
 /// Runs [items] (ARCHITECTURE 5.2). Shared by the UI and the Android
 /// background run, so both behave identically.
 ///
-/// With [deferWebViewOffers] (Android background, no WebView there), offers
-/// that need a WebView are skipped and stay due; the item's other offers are
-/// still checked and may ring. The item only counts as run (`lastRunAt`)
-/// once no offer was skipped, so the next foreground catch-up checks the
-/// skipped ones (REQUIREMENTS §9, R3).
+/// With [deferWebViewOffers] (Android background run), offers that need a
+/// WebView stay due unless they are checked successfully here: with no
+/// [webView] they are skipped up front, and a failed WebView check is not
+/// recorded — the background WebView is unproven (REQUIREMENTS §9, R3), and
+/// recording its failure would hide the offer from the foreground catch-up.
+/// The item's other offers are checked and may ring. The item only counts as
+/// run (`lastRunAt`) once no offer was skipped.
 Future<List<ItemRunResult>> runPriceChecks({
   required AppDatabase db,
   required List<Item> items,
@@ -162,16 +164,12 @@ Future<List<ItemRunResult>> runPriceChecks({
         : allOffers
               .where((o) => ScheduleCalculator.isOfferDue(item, o, now))
               .toList();
-    final toCheck = deferWebViewOffers
+    final toCheck = deferWebViewOffers && webView == null
         ? selected.where((o) => !o.needsWebView).toList()
         : selected;
-    final skipped = selected.length - toCheck.length;
+    var skipped = selected.length - toCheck.length;
     if (skipped > 0) {
       log.info('Run ${item.name}: $skipped offer(s) deferred (need WebView)');
-    }
-    if (toCheck.isEmpty) {
-      results.add((itemId: item.id, decision: null));
-      continue;
     }
 
     final outcomes = <({String shopName, CheckOutcome outcome})>[];
@@ -184,6 +182,17 @@ Future<List<ItemRunResult>> runPriceChecks({
         http: http,
         webView: webView,
       );
+      if (deferWebViewOffers &&
+          offer.needsWebView &&
+          outcome.status != CheckStatus.ok) {
+        skipped++;
+        log.info(
+          'Check ${item.name} @ ${offer.shopName}: deferred, background '
+          'WebView ${outcome.status.name}'
+          '${outcome.error == null ? '' : ' (${outcome.error})'}',
+        );
+        continue;
+      }
       final checkedAt = clock().toUtc();
       await db.priceChecksDao.insertCheck(
         offer.id,
@@ -203,6 +212,10 @@ Future<List<ItemRunResult>> runPriceChecks({
       );
       outcomes.add((shopName: offer.shopName, outcome: outcome));
     }
+    if (outcomes.isEmpty) {
+      results.add((itemId: item.id, decision: null));
+      continue;
+    }
 
     final decision = AlarmEvaluator.evaluate(
       targetPrice: item.targetPrice,
@@ -211,7 +224,7 @@ Future<List<ItemRunResult>> runPriceChecks({
       lastAlarmAt: item.lastAlarmAt,
       cycleStart: ScheduleCalculator.latestDue(item.checkTime, now),
       // Only a run over every offer may clear `active`.
-      complete: toCheck.length == allOffers.length,
+      complete: outcomes.length == allOffers.length,
       results: outcomes,
     );
     final finishedAt = clock().toUtc();

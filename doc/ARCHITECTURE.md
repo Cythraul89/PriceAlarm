@@ -257,12 +257,13 @@ inexact Doze-capable alarm.
 not always running. Catch-up gives the user a fresh price whenever they look,
 and the UI states the platform limitation instead of implying exact timing.
 
-### 7.7 Android background runs defer WebView offers, not items
-**What:** the background run checks the item's HTTP offers and leaves offers
-that need the WebView due (`RunScope.dueOffers` + `deferWebViewOffers`);
-`lastRunAt` is only set once no offer was skipped, so the foreground catch-up
-checks the remaining ones.
-**Why:** a headless WebView in the background isolate is unproven (R3).
+### 7.7 Android background runs defer failed WebView offers, not items
+**What:** the background run checks all due offers, WebView offers in a
+headless WebView. A WebView offer whose check fails there is not recorded and
+stays due (`RunScope.dueOffers` + `deferWebViewOffers`); `lastRunAt` is only
+set once no offer was skipped, so the foreground catch-up checks the rest.
+**Why:** a headless WebView in the background isolate is unproven (R3) — it
+may fail on some devices; recording that failure would end the offer's cycle.
 Skipping whole items (v0.1) meant an item with a Galaxus offer was never
 checked in the background — the device log showed `deferred (needs WebView)`
 at every scheduled run, so the alarm only rang on app open.

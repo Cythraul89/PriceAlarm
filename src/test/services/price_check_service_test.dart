@@ -290,6 +290,55 @@ void main() {
       expect(item?.lastAlarmAt?.isAtSameMomentAs(now), isTrue);
     });
 
+    test('background run with a working WebView checks the WebView offer '
+        'too and completes the run', () async {
+      final id = await createItem(target: '2300');
+      await galaxusSeenViaWebViewYesterday(id);
+      final http = _FakeFetcher({_brack: PageFetched(_product('2400.00'))});
+      final webView = _FakeFetcher({_galaxus: PageFetched(_product('2276.00'))});
+
+      await run(id, http, webView, scope: RunScope.dueOffers, defer: true);
+
+      expect(webView.calls, [_galaxus]);
+      expect(notifier.alarms.single.shopName, 'Galaxus');
+      final item = await db.itemsDao.findById(id);
+      expect(item?.lastRunAt?.isAtSameMomentAs(now), isTrue);
+    });
+
+    test('a failed background WebView check is not recorded and the offer '
+        'stays due', () async {
+      final id = await createItem(target: '2300');
+      await galaxusSeenViaWebViewYesterday(id);
+      final http = _FakeFetcher({_brack: PageFetched(_product('2400.00'))});
+      final webView = _FakeFetcher({
+        _galaxus: const PageNetworkError('WebView error: MissingPlugin'),
+      });
+
+      await run(id, http, webView, scope: RunScope.dueOffers, defer: true);
+
+      final galaxus = (await db.offersDao.getByItem(
+        id,
+      )).firstWhere((o) => o.shopName == 'Galaxus');
+      expect(galaxus.lastStatus, CheckStatus.ok); // yesterday's result
+      expect(galaxus.lastPrice, Decimal.parse('2276.00'));
+      expect(
+        await db.priceChecksDao.watchByItem(id, limit: 10).first,
+        hasLength(1), // only Brack
+      );
+      final item = await db.itemsDao.findById(id);
+      expect(item?.lastRunAt, isNull);
+      expect(item?.alarmActive, isFalse); // partial run cannot decide
+
+      // The foreground catch-up picks Galaxus up.
+      now = now.add(const Duration(minutes: 30));
+      final fgWebView = _FakeFetcher({
+        _galaxus: PageFetched(_product('2276.00')),
+      });
+      await run(id, http, fgWebView, scope: RunScope.dueOffers);
+      expect(fgWebView.calls, [_galaxus]);
+      expect(notifier.alarms.single.shopName, 'Galaxus');
+    });
+
     test('foreground catch-up then checks only the skipped WebView offer and '
         'does not ring twice in the cycle', () async {
       final id = await createItem(target: '2300');
