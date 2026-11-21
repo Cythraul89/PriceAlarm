@@ -15,7 +15,7 @@
 ```
 Flutter stable channel   (CI: subosito/flutter-action@v2, channel: stable)
 Dart SDK >=3.9.0 <4.0.0  (locally verified with Flutter 3.47.1 / Dart 3.13.1)
-Java 17 (Android builds only)
+Java 21 (Android builds only — AGP lint crashes on 17, see traps)
 ```
 
 ---
@@ -237,6 +237,11 @@ Providers that **must be overridden** at startup (each throws otherwise):
   more via AAR metadata. CI failed at `:app:checkDebugAarMetadata` until the
   patch raised it to 37. When a plugin update raises it again, raise the
   number in `build.yml`.
+- **Gradle needs JDK 21 for release builds.** The lint bundled with the current
+  AGP calls `List.removeLast()` (JDK 21 API); on JDK 17 `lintVitalAnalyzeRelease`
+  dies with `NoSuchMethodError` ("bug in lint"). Debug builds skip lint-vital,
+  so only release failed. `build.yml` uses Temurin 21 — do not go back to 17 or
+  silence lint instead.
 - **android_alarm_manager_plus applies the Kotlin Gradle Plugin** — Flutter
   warns that future versions will refuse to build such plugins (built-in
   Kotlin migration). Not an error yet; watch the plugin's changelog.

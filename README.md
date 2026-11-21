@@ -79,7 +79,7 @@ are checked at the next app start/resume.
 ## Getting Started
 
 Prerequisites: Flutter (stable channel), plus the platform toolchain you build
-for (Android SDK + Java 17, Xcode, or the Linux/Windows desktop toolchain).
+for (Android SDK + Java 21, Xcode, or the Linux/Windows desktop toolchain).
 
 ```bash
 cd src
