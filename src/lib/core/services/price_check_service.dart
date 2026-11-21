@@ -70,7 +70,15 @@ Future<CheckOutcome> checkOffer({
       case CheckStatus.blocked ||
           CheckStatus.noPrice ||
           CheckStatus.unsupported:
-        previous = outcome;
+        // Keep every transport's reason — otherwise the HTTP fallback's
+        // "403" hides why the WebView failed.
+        previous = previous == null
+            ? outcome
+            : CheckOutcome(
+                status: outcome.status,
+                method: outcome.method,
+                error: '${previous.error}; ${outcome.error}',
+              );
     }
   }
   return previous!;

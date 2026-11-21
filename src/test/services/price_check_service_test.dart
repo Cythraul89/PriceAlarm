@@ -132,6 +132,21 @@ void main() {
       expect(outcome.error, contains('WebView not available'));
     });
 
+    test('when both transports fail, both reasons are kept', () async {
+      final http = _FakeFetcher({_galaxus: const PageBlocked('HTTP 403')});
+      final webView = _FakeFetcher({_galaxus: const PageFetched('<html></html>')});
+      final outcome = await checkOffer(
+        url: Uri.parse(_galaxus),
+        mode: FetchMode.auto,
+        resolvedMethod: FetchMethod.webview,
+        http: http,
+        webView: webView,
+      );
+      expect(outcome.status, CheckStatus.blocked);
+      expect(outcome.error, contains('No structured price data'));
+      expect(outcome.error, contains('HTTP 403'));
+    });
+
     test('webview mode without a WebView is unsupported', () async {
       final outcome = await checkOffer(
         url: Uri.parse(_galaxus),

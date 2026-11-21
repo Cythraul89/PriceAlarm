@@ -136,7 +136,7 @@ final class PageUnsupported extends PageFetchResult { final String reason; }  //
 Both fetchers implement `abstract interface class PageFetcher { Future<PageFetchResult> fetch(Uri url); }`.
 The WebView fetcher returns the **serialised DOM**
 (`document.documentElement.outerHTML` via `evaluateJavascript`, after the load
-event plus a 2 s settle delay), so `PriceExtractor` is the single parser for
+event, then polled until it carries a price, at most 20 s), so `PriceExtractor` is the single parser for
 both modes.
 
 `PriceExtractor.extract(String html) → ExtractedPrice?` is pure: `null` means
