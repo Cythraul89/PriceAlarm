@@ -1,0 +1,460 @@
+# Reusable build workflow — the SINGLE definition of how this app is built.
+# Called by ci.yml (branch pushes) and release.yml (version tags); those two differ only in
+# trigger, version string and what happens with the artifacts. Never duplicate a build step
+# into a caller — change it here.
+#
+# Canonical matrix: Android · iOS · Linux (.deb) · macOS · Windows  ×  debug + release.
+# Artifact names: PriceAlarm-<version>-<mode>-<platform>[-<arch>].<ext>
+#
+# Action SHAs are pinned — re-pin deliberately.
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Build name, e.g. 0.1.0-dev or 1.0.0 (without a leading v)'
+        required: true
+        type: string
+      retention-days:
+        description: 'Artifact retention in days'
+        required: false
+        default: 14
+        type: number
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+defaults:
+  run:
+    working-directory: src
+
+jobs:
+  # ── Android (.apk) ──────────────────────────────────────────────────────────
+  # A release build needs no secrets: the Flutter template signs the release buildType
+  # with the debug key. When the keystore secrets exist, the real signing config is
+  # injected for BOTH buildTypes. KEYSTORE_B64 is a job-level env var on purpose — a
+  # step's own env block is not visible to that step's `if:` condition.
+  android:
+    name: Android (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [debug, release]
+    env:
+      KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_B64 }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart run build_runner build
+      - name: Scaffold Android platform
+        run: flutter create --platforms=android .
+
+      # flutter_inappwebview_android 1.1.3 still calls
+      # getDefaultProguardFile('proguard-android.txt'), which AGP 9 rejects while
+      # configuring the project (verified locally with AGP 9.1.0). Patch the
+      # pub-cache copy until upstream ships a fix; the step reports when there is
+      # nothing left to patch.
+      - name: Patch flutter_inappwebview_android for AGP 9
+        shell: python3 {0}
+        run: |
+          import json, pathlib
+          config = json.loads(pathlib.Path('.dart_tool/package_config.json').read_text())
+          pkg = next(p for p in config['packages'] if p['name'] == 'flutter_inappwebview_android')
+          gradle = pathlib.Path(pkg['rootUri'].removeprefix('file://')) / 'android' / 'build.gradle'
+          text = gradle.read_text()
+          patched = text.replace("getDefaultProguardFile('proguard-android.txt')",
+                                 "getDefaultProguardFile('proguard-android-optimize.txt')")
+          if patched == text:
+              print(f'{gradle}: nothing to patch (fixed upstream?) — remove this step')
+          else:
+              gradle.write_text(patched)
+              print(f'{gradle}: patched proguard default file')
+
+      # INTERNET: release builds do not get it from the Flutter template.
+      # POST_NOTIFICATIONS: price alarms on Android 13+.
+      - name: Patch AndroidManifest (permissions)
+        shell: python3 {0}
+        run: |
+          path = 'android/app/src/main/AndroidManifest.xml'
+          with open(path) as f:
+              content = f.read()
+          for perm in [
+              'android.permission.INTERNET',
+              'android.permission.POST_NOTIFICATIONS',
+          ]:
+              if perm not in content:
+                  content = content.replace(
+                      '    <application',
+                      f'    <uses-permission android:name="{perm}"/>\n    <application',
+                      1,
+                  )
+                  print(f'Added permission: {perm}')
+          with open(path, 'w') as f:
+              f.write(content)
+
+      # compileSdk 36 is required by flutter_plugin_android_lifecycle; core library
+      # desugaring is required by flutter_local_notifications (any version >= 10).
+      # NOTE: the WorkManagerInitializer is deliberately NOT removed — workmanager
+      # 0.10.x calls WorkManager.getInstance() and relies on the default
+      # initializer (see CLAUDE.md, Platform traps).
+      - name: Patch build.gradle.kts (compileSdk, desugaring)
+        shell: python3 {0}
+        run: |
+          path = 'android/app/build.gradle.kts'
+          with open(path) as f:
+              content = f.read()
+          content = content.replace(
+              'compileSdk = flutter.compileSdkVersion', 'compileSdk = 36', 1)
+          content = content.replace(
+              'compileOptions {',
+              'compileOptions {\n        isCoreLibraryDesugaringEnabled = true', 1)
+          dep = '    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
+          if 'dependencies {}' in content:
+              content = content.replace('dependencies {}', 'dependencies {\n' + dep + '\n}', 1)
+          elif 'dependencies {' in content:
+              content = content.replace('dependencies {', 'dependencies {\n' + dep, 1)
+          else:
+              content = content.rstrip() + '\n\ndependencies {\n' + dep + '\n}\n'
+          with open(path, 'w') as f:
+              f.write(content)
+
+      - name: Write release keystore and key.properties
+        if: env.KEYSTORE_B64 != ''
+        env:
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > android/release.keystore
+          cat > android/key.properties <<EOF
+          storePassword=$STORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=../release.keystore
+          EOF
+
+      # Both buildTypes point at the release signing config, so debug and release
+      # artifacts share one key (an ephemeral per-runner debug key makes debug builds
+      # non-upgradable on a test device).
+      - name: Inject signing config
+        if: env.KEYSTORE_B64 != ''
+        shell: python3 {0}
+        run: |
+          path = 'android/app/build.gradle.kts'
+          with open(path) as f:
+              gradle = f.read()
+          nl = '\n'
+          header = (
+              'import java.util.Properties' + nl +
+              'import java.io.FileInputStream' + nl + nl +
+              'val keystoreProps = Properties().apply {' + nl +
+              '    val f = rootProject.file("key.properties")' + nl +
+              '    if (f.exists()) load(FileInputStream(f))' + nl +
+              '}' + nl + nl
+          )
+          signing = (
+              nl +
+              '    signingConfigs {' + nl +
+              '        create("release") {' + nl +
+              '            keyAlias      = keystoreProps["keyAlias"]      as String' + nl +
+              '            keyPassword   = keystoreProps["keyPassword"]   as String' + nl +
+              '            storeFile     = file(keystoreProps["storeFile"] as String)' + nl +
+              '            storePassword = keystoreProps["storePassword"] as String' + nl +
+              '        }' + nl +
+              '    }' + nl
+          )
+          debug_override = (
+              nl + '        debug {' + nl +
+              '            signingConfig = signingConfigs.getByName("release")' + nl +
+              '        }'
+          )
+          gradle = header + gradle
+          gradle = gradle.replace(
+              '    buildTypes {', signing + '    buildTypes {' + debug_override, 1)
+          gradle = gradle.replace(
+              'signingConfig = signingConfigs.getByName("debug")',
+              'signingConfig = signingConfigs.getByName("release")', 1)
+          with open(path, 'w') as f:
+              f.write(gradle)
+          print('Injected release signing config for both buildTypes')
+
+      - name: Build APK (${{ matrix.mode }})
+        run: |
+          flutter build apk --${{ matrix.mode }} \
+            --build-name="${{ inputs.version }}" \
+            --build-number=${{ github.run_number }}
+          cp "build/app/outputs/flutter-apk/app-${{ matrix.mode }}.apk" \
+            "PriceAlarm-${{ inputs.version }}-${{ matrix.mode }}-android.apk"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: price-alarm-android-${{ matrix.mode }}
+          path: src/PriceAlarm-*-android.apk
+          retention-days: ${{ inputs.retention-days }}
+
+  # ── iOS (.app zip, unsigned) ────────────────────────────────────────────────
+  # CI has no provisioning profile, so both modes build with --no-codesign. The result is
+  # a Runner.app bundle, NOT an installable .ipa — it cannot be side-loaded without
+  # re-signing. Its purpose is to prove the iOS target compiles.
+  ios:
+    name: iOS (${{ matrix.mode }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [debug, release]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart run build_runner build
+      - name: Scaffold iOS platform
+        run: flutter create --platforms=ios .
+
+      # Add only the usage descriptions the app needs — a missing key is an App Store
+      # rejection, a superfluous one is a privacy question you have to answer.
+      - name: Patch Info.plist (usage descriptions)
+        shell: python3 {0}
+        run: |
+          path = 'ios/Runner/Info.plist'
+          # PriceAlarm needs no usage descriptions (no camera, photos, location).
+          keys = {}
+          if not keys:
+              print('No usage descriptions configured — skipping')
+          else:
+              with open(path) as f:
+                  content = f.read()
+              for key, text in keys.items():
+                  if key not in content:
+                      content = content.replace(
+                          '</dict>',
+                          f'\t<key>{key}</key>\n\t<string>{text}</string>\n</dict>', 1)
+                      print(f'Added {key}')
+              with open(path, 'w') as f:
+                  f.write(content)
+
+      - name: Build iOS (${{ matrix.mode }}, unsigned)
+        run: |
+          flutter build ios --${{ matrix.mode }} --no-codesign \
+            --build-name="${{ inputs.version }}" \
+            --build-number=${{ github.run_number }}
+          # The output directory differs between modes and Flutter versions
+          # (build/ios/iphoneos vs build/ios/<Mode>-iphoneos) — locate it, don't hardcode.
+          APP=$(find build/ios -maxdepth 3 -type d -name 'Runner.app' | head -1)
+          test -n "$APP" || { echo 'Runner.app not found'; find build/ios -maxdepth 3; exit 1; }
+          ditto -c -k --sequesterRsrc --keepParent "$APP" \
+            "PriceAlarm-${{ inputs.version }}-${{ matrix.mode }}-ios-unsigned.zip"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: price-alarm-ios-${{ matrix.mode }}
+          path: src/PriceAlarm-*-ios-unsigned.zip
+          retention-days: ${{ inputs.retention-days }}
+
+  # ── Linux (.deb) ────────────────────────────────────────────────────────────
+  linux:
+    name: Linux (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [debug, release]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y clang cmake ninja-build libgtk-3-dev dpkg-dev
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart run build_runner build
+      - name: Scaffold Linux platform
+        run: flutter create --platforms=linux .
+      - name: Build Linux (${{ matrix.mode }})
+        run: |
+          flutter build linux --${{ matrix.mode }} \
+            --build-name="${{ inputs.version }}" \
+            --build-number=${{ github.run_number }}
+      - name: Package as .deb
+        run: |
+          BUNDLE=build/linux/x64/${{ matrix.mode }}/bundle
+          PKG=/tmp/price-alarm-pkg-${{ matrix.mode }}
+          ARCH=amd64
+          # Debian versions must not contain a bare '-' outside the revision field:
+          # 0.1.0-dev → 0.1.0~dev, then append the run number as the revision.
+          DEB_VERSION="$(printf '%s' '${{ inputs.version }}' | tr '-' '~')-${{ github.run_number }}"
+
+          install -dm755 "$PKG/DEBIAN" "$PKG/usr/lib/price-alarm" \
+                         "$PKG/usr/bin" "$PKG/usr/share/applications"
+          cp -r "$BUNDLE/." "$PKG/usr/lib/price-alarm/"
+
+          printf '#!/bin/sh\nexec /usr/lib/price-alarm/price_alarm "$@"\n' \
+            > "$PKG/usr/bin/price-alarm"
+          chmod 755 "$PKG/usr/bin/price-alarm"
+
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Name=PriceAlarm' \
+            'Comment=Daily shop price checks with target-price alarms' \
+            'Exec=/usr/bin/price-alarm' \
+            'Terminal=false' \
+            'Type=Application' \
+            'Categories=Utility;' \
+            > "$PKG/usr/share/applications/price-alarm.desktop"
+
+          INSTALLED_SIZE=$(du -sk "$PKG/usr" | cut -f1)
+          printf 'Package: price-alarm\nVersion: %s\nArchitecture: %s\nMaintainer: PriceAlarm contributors\nInstalled-Size: %s\nDepends: libgtk-3-0\nSection: utils\nPriority: optional\nDescription: Daily shop price checks with target-price alarms\n PriceAlarm reads product prices from shop pages once a day and raises a\n local notification when a target price is reached.\n' \
+            "$DEB_VERSION" "$ARCH" "$INSTALLED_SIZE" > "$PKG/DEBIAN/control"
+
+          dpkg-deb --root-owner-group --build "$PKG" \
+            "PriceAlarm-${{ inputs.version }}-${{ matrix.mode }}-linux-amd64.deb"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: price-alarm-linux-${{ matrix.mode }}
+          path: src/PriceAlarm-*-linux-amd64.deb
+          retention-days: ${{ inputs.retention-days }}
+
+  # ── macOS (.app zip) ────────────────────────────────────────────────────────
+  # Without MACOS_CERTIFICATE the .app is only ad-hoc signed — it runs, but is not
+  # Gatekeeper-verified for other users. State that in the README.
+  macos:
+    name: macOS (${{ matrix.mode }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: debug
+            dir: Debug
+          - mode: release
+            dir: Release
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart run build_runner build
+      - name: Scaffold macOS platform
+        run: flutter create --platforms=macos .
+      - name: Import signing certificate
+        if: env.MACOS_CERTIFICATE != ''
+        env:
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "" build.keychain
+          security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security list-keychains -s build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+      - name: Build macOS (${{ matrix.mode }})
+        run: |
+          flutter build macos --${{ matrix.mode }} \
+            --build-name="${{ inputs.version }}" \
+            --build-number=${{ github.run_number }}
+      # Ad-hoc re-sign without the sandbox: network + user-selected file access only.
+      # Applied to both modes so a downloaded debug build behaves like the release one.
+      - name: Ad-hoc re-sign
+        working-directory: src/build/macos/Build/Products/${{ matrix.dir }}
+        run: |
+          cat > /tmp/nosandbox.entitlements << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.network.client</key>
+            <true/>
+            <key>com.apple.security.files.user-selected.read-write</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+          codesign --deep --force --sign - \
+            --entitlements /tmp/nosandbox.entitlements \
+            price_alarm.app
+      - name: Package .app as zip
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            "build/macos/Build/Products/${{ matrix.dir }}/price_alarm.app" \
+            "PriceAlarm-${{ inputs.version }}-${{ matrix.mode }}-macos.zip"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: price-alarm-macos-${{ matrix.mode }}
+          path: src/PriceAlarm-*-macos.zip
+          retention-days: ${{ inputs.retention-days }}
+
+  # ── Windows (.zip) ──────────────────────────────────────────────────────────
+  windows:
+    name: Windows (${{ matrix.mode }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: debug
+            dir: Debug
+          - mode: release
+            dir: Release
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart run build_runner build
+      - name: Scaffold Windows platform
+        run: flutter create --platforms=windows .
+      - name: Build Windows (${{ matrix.mode }}) and zip
+        run: |
+          flutter build windows --${{ matrix.mode }} `
+            --build-name="${{ inputs.version }}" `
+            --build-number=${{ github.run_number }}
+          Compress-Archive -Path build\windows\x64\runner\${{ matrix.dir }}\* `
+            -DestinationPath "PriceAlarm-${{ inputs.version }}-${{ matrix.mode }}-windows-x64.zip"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: price-alarm-windows-${{ matrix.mode }}
+          path: src/PriceAlarm-*-windows-x64.zip
+          retention-days: ${{ inputs.retention-days }}
+
+  # ── SBOM ────────────────────────────────────────────────────────────────────
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          cache: true
+      - name: Resolve pub dependencies
+        run: flutter pub get
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: ./src
+          format: cyclonedx-json
+          artifact-name: price-alarm-sbom.cdx.json
+          output-file: price-alarm-sbom.cdx.json
+          upload-release-assets: false

@@ -1,0 +1,61 @@
+name: price_alarm
+description: Watches shop prices once a day and alarms when a target price is reached.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  # Raised from the house-style 3.3.0: the current drift/sqlite3 3.x and
+  # go_router releases require a recent SDK (see CLAUDE.md, Deviations).
+  sdk: '>=3.9.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management (manual providers — no code generation)
+  flutter_riverpod: ^2.6.1
+
+  # Navigation
+  go_router: ^18.1.4
+
+  # Local database (sqlite3 3.x bundles SQLite via build hooks, so
+  # sqlite3_flutter_libs is obsolete and intentionally absent)
+  drift: ^2.35.4
+  path_provider: ^2.1.6
+  path: ^1.9.1
+
+  # Price retrieval
+  dio: ^5.11.1
+  html: ^0.15.7
+  flutter_inappwebview: ^6.1.5
+
+  # Money arithmetic — never double for money
+  decimal: ^3.2.6
+
+  # Notifications / background work (background: Android only)
+  flutter_local_notifications: ^23.0.3
+  workmanager: ^0.10.10
+
+  # Local backup (export / import) and log sharing
+  file_picker: ^13.4.0
+  archive: ^4.7.1
+  share_plus: ^13.3.1
+
+  # App version (About screen) and external links
+  package_info_plus: ^10.2.2
+  url_launcher: ^6.3.3
+
+  # Utilities
+  uuid: ^4.6.0
+  intl: ^0.20.3
+  equatable: ^3.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  drift_dev: ^2.35.3
+  build_runner: ^2.17.1
+
+flutter:
+  uses-material-design: true
