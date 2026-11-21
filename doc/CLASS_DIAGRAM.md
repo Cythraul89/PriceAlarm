@@ -11,8 +11,12 @@ main.dart overrides
   notificationServiceProvider ─┤              │                 │
   httpPageFetcherProvider ─────┤              │                 │
   webViewPageFetcherProvider ──┤              │                 │
+  alarmSoundProvider ──────────┤              │                 │
   appVersionProvider           ▼              ▼                 ▼
-                     priceCheckServiceProvider  backupServiceProvider
+                     alarmControllerProvider    backupServiceProvider
+                               │
+                               ▼
+                     priceCheckServiceProvider
                                │
                                ▼
                      schedulerServiceProvider
@@ -28,12 +32,14 @@ Read models (watch appDatabaseProvider):
 Write side (ref.read):
   itemActionsProvider     save / delete / setEnabled / checkNow / checkAll
                           → DAOs, priceCheckService, scheduler.reschedule()
-  settingsActionsProvider setThemeMode / requestNotificationPermission
+  settingsActionsProvider setThemeMode / requestNotificationPermission /
+                          requestFullScreenAlarmPermission / testAlarm
 ```
 
 ## 2. Navigation tree
 
 ```
+/alarm/:itemId            AlarmScreen(itemId)      (outside the shell)
 StatefulShellRoute.indexedStack (AdaptiveShell)
 ├── /items                ItemsScreen
 │   ├── /items/new        ItemEditScreen()
@@ -71,7 +77,14 @@ sealed PageFetchResult
 PageFetcher (interface) ◀── HttpPageFetcher(dio, log)
                         ◀── WebViewPageFetcher(log)
 
-AlarmNotifier (interface) ◀── NotificationService
+AlarmNotifier (interface: showAlarm, cancelAlarm)
+  ◀── NotificationService           (rings itself on Android)
+  ◀── AlarmController(notifications, sound)
+        rings: Stream<ActiveAlarm>, current, stop({itemId}), ringTest()
+
+AlarmSound (interface: start, stop)
+  ◀── AudioAlarmSound (audioplayers, assets/sounds/alarm.wav, loop)
+  ◀── SilentAlarmSound (Android)
 
 PriceCheckService            SchedulerService
   runItem(id)                  catchUpAndReschedule()
@@ -82,6 +95,7 @@ PriceCheckService            SchedulerService
 Top-level functions
   checkOffer({url, mode, resolvedMethod, http, webView}) → CheckOutcome
   runPriceChecks({db, items, http, webView, notifier, log, clock,
-                  deferWebViewItems}) → List<ItemRunResult>
-  callbackDispatcher()   (WorkManager entry point, Android)
+                  scope: RunScope, deferWebViewOffers}) → List<ItemRunResult>
+  priceRunCallback()     (android_alarm_manager_plus entry point, Android)
+  scheduleAndroidRun(next, {exactAllowed, log})
 ```

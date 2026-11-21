@@ -12,6 +12,7 @@ class Item extends Equatable {
     required this.alarmActive,
     required this.lastRunAt,
     required this.createdAt,
+    this.lastAlarmAt,
   });
 
   final String id;
@@ -30,6 +31,9 @@ class Item extends Equatable {
   /// UTC.
   final DateTime createdAt;
 
+  /// When the alarm last rang (UTC); at most one ring per daily cycle.
+  final DateTime? lastAlarmAt;
+
   @override
   List<Object?> get props => [
     id,
@@ -41,5 +45,6 @@ class Item extends Equatable {
     alarmActive,
     lastRunAt,
     createdAt,
+    lastAlarmAt,
   ];
 }

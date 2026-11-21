@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:decimal/decimal.dart';
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
-import 'package:flutter/material.dart' show ThemeMode;
+import 'package:material_ui/material_ui.dart' show ThemeMode;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -36,7 +36,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.openForIsolate() : super(_openConnection());
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -44,10 +44,18 @@ class AppDatabase extends _$AppDatabase {
       await m.createAll();
       await into(settings).insert(SettingsCompanion.insert());
     },
+    onUpgrade: (m, from, to) async {
+      if (from < 2) {
+        await m.addColumn(items, items.lastAlarmAt);
+      }
+    },
     // Foreign keys are off by default in SQLite; cascade deletes of offers
     // and history depend on them.
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
+      // The Android background isolate opens its own connection to the same
+      // file; wait for a concurrent writer instead of failing with BUSY.
+      await customStatement('PRAGMA busy_timeout = 5000');
     },
   );
 

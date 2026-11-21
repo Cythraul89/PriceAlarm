@@ -10,7 +10,8 @@ import 'log_service.dart';
 import 'page_fetcher.dart';
 import 'price_extractor.dart';
 
-/// Receives alarm notifications; implemented by `NotificationService`.
+/// Raises and silences alarms; implemented by `NotificationService`
+/// (background) and `AlarmController` (app running).
 abstract interface class AlarmNotifier {
   Future<void> showAlarm({
     required String itemId,
@@ -20,6 +21,8 @@ abstract interface class AlarmNotifier {
     required String currency,
     required String shopName,
   });
+
+  Future<void> cancelAlarm(String itemId);
 }
 
 const kHistoryRetention = Duration(days: 365);
@@ -67,7 +70,15 @@ Future<CheckOutcome> checkOffer({
       case CheckStatus.blocked ||
           CheckStatus.noPrice ||
           CheckStatus.unsupported:
-        previous = outcome;
+        // Keep every transport's reason — otherwise the HTTP fallback's
+        // "403" hides why the WebView failed.
+        previous = previous == null
+            ? outcome
+            : CheckOutcome(
+                status: outcome.status,
+                method: outcome.method,
+                error: '${previous.error}; ${outcome.error}',
+              );
     }
   }
   return previous!;
@@ -121,12 +132,26 @@ CheckOutcome _extract(String html, FetchMethod method) {
 /// Outcome of one item run.
 typedef ItemRunResult = ({String itemId, AlarmDecision? decision});
 
+/// Which offers of an item a run checks.
+enum RunScope {
+  /// Every offer — "Check now", "Check all", a new item.
+  allOffers,
+
+  /// Only offers not checked since the item's latest due instant —
+  /// scheduled runs and catch-ups.
+  dueOffers,
+}
+
 /// Runs [items] (ARCHITECTURE 5.2). Shared by the UI and the Android
-/// background worker, so both behave identically.
+/// background run, so both behave identically.
 ///
-/// With [deferWebViewItems], items that have an offer needing a WebView
-/// are skipped entirely and stay due, so the next foreground catch-up runs
-/// them completely (REQUIREMENTS §9, R3 fallback).
+/// With [deferWebViewOffers] (Android background run), offers that need a
+/// WebView stay due unless they are checked successfully here: with no
+/// [webView] they are skipped up front, and a failed WebView check is not
+/// recorded — the background WebView is unproven (REQUIREMENTS §9, R3), and
+/// recording its failure would hide the offer from the foreground catch-up.
+/// The item's other offers are checked and may ring. The item only counts as
+/// run (`lastRunAt`) once no offer was skipped.
 Future<List<ItemRunResult>> runPriceChecks({
   required AppDatabase db,
   required List<Item> items,
@@ -135,20 +160,29 @@ Future<List<ItemRunResult>> runPriceChecks({
   required AlarmNotifier notifier,
   required LogService log,
   required DateTime Function() clock,
-  bool deferWebViewItems = false,
+  RunScope scope = RunScope.allOffers,
+  bool deferWebViewOffers = false,
 }) async {
   final results = <ItemRunResult>[];
   for (final item in items) {
-    final offers = await db.offersDao.getByItem(item.id);
-    if (deferWebViewItems && offers.any((o) => o.needsWebView)) {
-      log.info('Run ${item.name}: deferred (needs WebView)');
-      results.add((itemId: item.id, decision: null));
-      continue;
+    final now = clock();
+    final allOffers = await db.offersDao.getByItem(item.id);
+    final selected = scope == RunScope.allOffers
+        ? allOffers
+        : allOffers
+              .where((o) => ScheduleCalculator.isOfferDue(item, o, now))
+              .toList();
+    final toCheck = deferWebViewOffers && webView == null
+        ? selected.where((o) => !o.needsWebView).toList()
+        : selected;
+    var skipped = selected.length - toCheck.length;
+    if (skipped > 0) {
+      log.info('Run ${item.name}: $skipped offer(s) deferred (need WebView)');
     }
 
     final outcomes = <({String shopName, CheckOutcome outcome})>[];
     // Sequential on purpose: one page load at a time.
-    for (final offer in offers) {
+    for (final offer in toCheck) {
       final outcome = await checkOffer(
         url: Uri.parse(offer.url),
         mode: offer.fetchMode,
@@ -156,6 +190,17 @@ Future<List<ItemRunResult>> runPriceChecks({
         http: http,
         webView: webView,
       );
+      if (deferWebViewOffers &&
+          offer.needsWebView &&
+          outcome.status != CheckStatus.ok) {
+        skipped++;
+        log.info(
+          'Check ${item.name} @ ${offer.shopName}: deferred, background '
+          'WebView ${outcome.status.name}'
+          '${outcome.error == null ? '' : ' (${outcome.error})'}',
+        );
+        continue;
+      }
       final checkedAt = clock().toUtc();
       await db.priceChecksDao.insertCheck(
         offer.id,
@@ -175,17 +220,27 @@ Future<List<ItemRunResult>> runPriceChecks({
       );
       outcomes.add((shopName: offer.shopName, outcome: outcome));
     }
+    if (outcomes.isEmpty) {
+      results.add((itemId: item.id, decision: null));
+      continue;
+    }
 
     final decision = AlarmEvaluator.evaluate(
       targetPrice: item.targetPrice,
       currency: item.currency,
       wasActive: item.alarmActive,
+      lastAlarmAt: item.lastAlarmAt,
+      cycleStart: ScheduleCalculator.latestDue(item.checkTime, now),
+      // Only a run over every offer may clear `active`.
+      complete: outcomes.length == allOffers.length,
       results: outcomes,
     );
+    final finishedAt = clock().toUtc();
     await db.itemsDao.recordRun(
       item.id,
       alarmActive: decision.active,
-      lastRunAt: clock().toUtc(),
+      lastRunAt: skipped == 0 ? finishedAt : null,
+      lastAlarmAt: decision.fire ? finishedAt : null,
     );
     if (decision.fire) {
       try {
@@ -232,19 +287,19 @@ class PriceCheckService {
 
   Future<void> runItem(String itemId) async {
     final item = await db.itemsDao.findById(itemId);
-    if (item != null) await _run([item]);
+    if (item != null) await _run([item], RunScope.allOffers);
   }
 
   Future<void> runAllEnabled() async {
     final items = await db.itemsDao.getAll();
-    await _run(items.where((i) => i.enabled).toList());
+    await _run(items.where((i) => i.enabled).toList(), RunScope.allOffers);
   }
 
-  /// Catch-up (REQUIREMENTS 5.1.2): every item whose due time passed since
-  /// its last run.
+  /// Catch-up (REQUIREMENTS 5.1.2): the due offers of every item whose due
+  /// time passed since its last complete run.
   Future<void> runDue() async {
     final items = await db.itemsDao.getAll();
-    await _run(ScheduleCalculator.dueItems(items, clock()));
+    await _run(ScheduleCalculator.dueItems(items, clock()), RunScope.dueOffers);
   }
 
   /// One check without persisting anything — the form's "Test" button.
@@ -255,7 +310,7 @@ class PriceCheckService {
     webView: webView,
   );
 
-  Future<void> _run(List<Item> items) async {
+  Future<void> _run(List<Item> items, RunScope scope) async {
     final toRun = items.where((i) => !_running.contains(i.id)).toList();
     if (toRun.isEmpty) return;
     _running.addAll(toRun.map((i) => i.id));
@@ -268,6 +323,7 @@ class PriceCheckService {
         notifier: notifier,
         log: log,
         clock: clock,
+        scope: scope,
       );
     } catch (e, st) {
       log.error('Price run failed', e, st);

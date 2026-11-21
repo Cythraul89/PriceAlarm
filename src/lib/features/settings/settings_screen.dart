@@ -1,4 +1,6 @@
-import 'package:flutter/material.dart';
+import 'dart:io';
+
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -13,6 +15,7 @@ class SettingsScreen extends ConsumerWidget {
     final theme = Theme.of(context);
     final themeMode = ref.watch(themeModeProvider).valueOrNull;
     final permission = ref.watch(notificationPermissionProvider);
+    final exactAlarms = ref.watch(exactAlarmPermissionProvider);
 
     Widget section(String title) => Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
@@ -68,6 +71,52 @@ class SettingsScreen extends ConsumerWidget {
                 ),
               },
             ),
+          ),
+          if (Platform.isAndroid)
+            ListTile(
+              title: const Text('Exact check time'),
+              subtitle: const Text(
+                'Lets the daily check run on time while the phone is idle, '
+                'like an alarm clock ("Alarms & reminders")',
+              ),
+              trailing: exactAlarms.when(
+                loading: () => const SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                error: (e, _) => const Text('unknown'),
+                data: (allowed) => allowed
+                    ? const Text('Allowed ✓')
+                    : FilledButton.tonal(
+                        onPressed: () => ref
+                            .read(settingsActionsProvider)
+                            .requestExactAlarmPermission(),
+                        child: const Text('Allow'),
+                      ),
+              ),
+            ),
+          if (Platform.isAndroid)
+            ListTile(
+              title: const Text('Allow alarm over lock screen'),
+              subtitle: const Text(
+                'Lets the alarm open full-screen like an alarm clock '
+                '(Android 14+ may require this)',
+              ),
+              trailing: const Icon(Icons.open_in_new),
+              onTap: () => ref
+                  .read(settingsActionsProvider)
+                  .requestFullScreenAlarmPermission(),
+            ),
+          ListTile(
+            title: const Text('Test alarm'),
+            subtitle: Text(
+              Platform.isAndroid
+                  ? 'Rings with your alarm-clock sound at alarm volume'
+                  : 'Rings while the app is open; volume follows the system '
+                        'volume',
+            ),
+            trailing: const Icon(Icons.alarm),
+            onTap: () => ref.read(settingsActionsProvider).testAlarm(),
           ),
           section('Data'),
           ListTile(

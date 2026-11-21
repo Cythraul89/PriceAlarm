@@ -1,7 +1,8 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'features/alarm/alarm_screen.dart';
 import 'features/item_detail/item_detail_screen.dart';
 import 'features/item_edit/item_edit_screen.dart';
 import 'features/items/items_screen.dart';
@@ -18,6 +19,12 @@ const _seedColor = Colors.indigo;
 final appRouter = GoRouter(
   initialLocation: '/items',
   routes: [
+    // Outside the shell: the alarm covers the whole window, no navigation.
+    GoRoute(
+      path: '/alarm/:itemId',
+      builder: (context, state) =>
+          AlarmScreen(itemId: state.pathParameters['itemId']!),
+    ),
     StatefulShellRoute.indexedStack(
       builder: (context, state, navigationShell) =>
           AdaptiveShell(navigationShell: navigationShell),
