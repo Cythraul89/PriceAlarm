@@ -16,7 +16,7 @@ Status: v0.1 implemented · Last updated: 2026-11-21
 | WebView fetch | `flutter_inappwebview` (`HeadlessInAppWebView`) | Android, iOS, macOS, Windows; no Linux implementation in 6.1.x |
 | Notifications | `flutter_local_notifications` | Android: alarm channel, alarm audio usage, insistent, full-screen intent |
 | Alarm sound | `audioplayers` | looping bundled WAV on iOS/desktop; Linux needs GStreamer |
-| Background (Android) | `workmanager` | one-off task re-enqueued per due time |
+| Background (Android) | `android_alarm_manager_plus` | exact alarm-clock alarm (`setAlarmClock`) per next due time; inexact Doze-capable fallback |
 | Backup | `archive`, `file_picker`, `share_plus` | |
 | About | `package_info_plus`, `url_launcher` | |
 | Utilities | `uuid`, `intl`, `equatable` | |
@@ -28,19 +28,19 @@ Versions are pinned in `src/pubspec.yaml` / `pubspec.lock` (resolved by pub on
 
 ```
 src/lib/
-├── main.dart                      bootstrap, provider overrides, WorkManager init
+├── main.dart                      bootstrap, provider overrides, alarm manager init
 ├── app.dart                       MaterialApp.router, theme, appRouter
 ├── core/
 │   ├── providers.dart             singleton + composed service providers
 │   ├── database/
-│   │   ├── app_database.dart      @DriftDatabase, schemaVersion 1
+│   │   ├── app_database.dart      @DriftDatabase, schemaVersion 2 (+ onUpgrade)
 │   │   ├── decimal_converter.dart
 │   │   ├── tables/                items, offers, price_checks, settings
 │   │   └── daos/                  items_dao, offers_dao, price_checks_dao, settings_dao
 │   ├── models/                    Item, Offer, PriceCheck, ItemDraft, CheckOutcome,
 │   │                              enums (FetchMode, FetchMethod, CheckStatus)
 │   ├── calculators/
-│   │   ├── alarm_evaluator.dart   best price + edge-triggered alarm decision
+│   │   ├── alarm_evaluator.dart   best price + once-per-cycle ring decision
 │   │   └── schedule_calculator.dart  due items, next due time, catch-up
 │   ├── services/
 │   │   ├── price_extractor.dart   JSON-LD / meta → ExtractedPrice (pure, no I/O)
@@ -48,8 +48,8 @@ src/lib/
 │   │   ├── http_page_fetcher.dart
 │   │   ├── webview_page_fetcher.dart
 │   │   ├── price_check_service.dart  orchestrates one run (see 5.2)
-│   │   ├── scheduler_service.dart    WorkManager / desktop timer / catch-up
-│   │   ├── background_worker.dart    WorkManager callbackDispatcher (Android)
+│   │   ├── scheduler_service.dart    exact alarm (Android) / desktop timer / catch-up
+│   │   ├── background_worker.dart    alarm callback + scheduleAndroidRun (Android)
 │   │   ├── alarm_controller.dart     rings: notification + sound + alarm-screen event
 │   │   ├── alarm_sound.dart          AlarmSound / AudioAlarmSound / SilentAlarmSound
 │   │   ├── notification_service.dart
@@ -171,7 +171,8 @@ the function is unit-testable with fakes.
 `AlarmEvaluator.evaluate(targetPrice, currency, wasActive, offerResults)`
 returns `AlarmDecision { Decimal? bestPrice; String? bestShop; bool active; bool fire; }`
 implementing REQUIREMENTS 5.2 exactly. Table-driven unit tests cover:
-no ok offer, mixed currencies, equality at target, edge vs. level, re-arm.
+no ok offer, mixed currencies, equality at target, once per cycle, new cycle,
+partial runs.
 
 ## 6. Scheduling
 
@@ -192,7 +193,7 @@ machine's time zone).
 
 | Platform | Mechanism |
 |---|---|
-| Android | `workmanager` one-off task with `initialDelay = nextDue − now`, unique name `price-run`, network constraint. The UI isolate enqueues with `replace` whenever items change; the task runs all due items (HTTP only, WebView items deferred) and enqueues the next run with `update` (APPEND_OR_REPLACE), because `replace` would cancel the running task itself. |
+| Android | One alarm (id 4711) via `android_alarm_manager_plus.oneShotAt` at `nextDue`: `alarmClock` + `exact` when exact alarms are allowed (fires on time in Doze; the system leaves Doze shortly before, so the network works), otherwise `allowWhileIdle` (Doze-capable, may be late); `wakeup`, `rescheduleOnReboot`. Scheduling with the same id replaces the pending alarm. The callback runs the due offers (HTTP only) and always schedules the next alarm, also after a failure. |
 | iOS | No background run in v0.1. Catch-up on app start and on `AppLifecycleState.resumed`. |
 | Desktop | A single `Timer` to `nextDue`, re-armed after each run and on item changes. Catch-up on start/resume. |
 
@@ -228,19 +229,27 @@ comparable offer price.
 shop below X". One check time per item keeps all shops of a product compared
 on the same snapshot.
 
-### 7.4 Edge-triggered alarm with persisted state
-**What:** notify on false → true only; `alarmActive` stored on the item.
-**Why:** a level-triggered alarm would notify every day while the price stays
-low. Persisting the state makes this survive restarts and background runs.
-A run with no `ok` offer leaves the state unchanged so an outage neither
-fires nor silently re-arms the alarm.
+### 7.4 Ring once per daily cycle, every day while reached
+**What:** ring in every cycle in which a check finds the best price at or
+below the target, at most once per cycle; `lastAlarmAt` (schema 2) records the
+ring, a target edit clears it.
+**Why:** the user wants a daily alarm while the price is low (decided
+2026-11-21, replacing the earlier "once per price drop" rule, which looked
+like a broken alarm in testing). One ring per cycle keeps catch-ups and
+"Check now" from ringing repeatedly.
+**Rejected:** ringing on every check — catch-ups would ring several times a day.
 
-### 7.5 One-off chained WorkManager task instead of a periodic task
-**What:** schedule exactly the next due instant, re-enqueue after each run.
-**Why:** periodic WorkManager work has a fixed interval and drifts; a daily
-check at a wall-clock time is naturally "next instant". Exact alarms
-(`AlarmManager` with `SCHEDULE_EXACT_ALARM`) were rejected: extra
-permission, and a deviation of minutes is acceptable for a daily price.
+### 7.5 Exact alarm-clock alarm instead of WorkManager (Android)
+**What:** schedule the next due instant with `setAlarmClock`
+(android_alarm_manager_plus); the callback re-schedules itself.
+**Why:** WorkManager postpones work in Doze — a device log showed runs 1, 3,
+10 and 14 minutes late, and OEM battery savers can hold it until the app is
+opened. Alarm-clock alarms are the mechanism Android provides for "at this
+time" and also show the next alarm like a clock app.
+**Cost:** the exact-alarm permission ("Alarms & reminders"), denied by default
+on Android 14+; the app asks via a banner/Settings and falls back to an
+inexact Doze-capable alarm.
+**Replaced:** the earlier decision for a chained WorkManager task (v0.1).
 
 ### 7.6 Catch-up instead of guaranteed timing on iOS and desktop
 **What:** missed runs are executed on start/resume; at most one per item.
@@ -248,14 +257,16 @@ permission, and a deviation of minutes is acceptable for a daily price.
 not always running. Catch-up gives the user a fresh price whenever they look,
 and the UI states the platform limitation instead of implying exact timing.
 
-### 7.7 Android background runs defer WebView items
-**What:** the WorkManager run passes no WebView fetcher and skips every item
-with an offer that needs one; such items stay due for the foreground catch-up.
-**Why:** a headless WebView in the background isolate is unproven (R3). A
-partial run would set `lastRunAt` and hide the missing Galaxus check until the
-next day.
-**Rejected:** marking those offers `unsupported` in the background — it would
-overwrite a valid status every day with a platform artefact.
+### 7.7 Android background runs defer WebView offers, not items
+**What:** the background run checks the item's HTTP offers and leaves offers
+that need the WebView due (`RunScope.dueOffers` + `deferWebViewOffers`);
+`lastRunAt` is only set once no offer was skipped, so the foreground catch-up
+checks the remaining ones.
+**Why:** a headless WebView in the background isolate is unproven (R3).
+Skipping whole items (v0.1) meant an item with a Galaxus offer was never
+checked in the background — the device log showed `deferred (needs WebView)`
+at every scheduled run, so the alarm only rang on app open.
+**Consequence:** a partial run may ring but never clears `alarmActive`.
 
 ### 7.8 New items are checked immediately
 **What:** saving a new item starts one run without waiting for it.
@@ -308,16 +319,17 @@ pops back to the previous screen.
 | `ScheduleCalculator` | unit | due/next-due, catch-up, creation time, month/year rollover |
 | `HttpPageFetcher` | integration | loopback `HttpServer`: 200, 403, 429, timeout, 500 |
 | DAOs | unit | in-memory Drift, cascade deletes, retention delete |
-| `runPriceChecks` | unit | fake fetchers + in-memory DB: escalation order, no escalation on network error, alarm fire/re-arm, history rows |
+| `runPriceChecks` | unit | fake fetchers + in-memory DB: escalation order, no escalation on network error, once-per-cycle ring, Android background partial run, foreground completion of deferred offers, history rows |
+| Migration | unit | real schema-1 database (fixture written by the previous version) upgraded to 2 |
+| `BackupService` | unit | export → import through real ZIP/JSON bytes |
 | Shell | widget | renders with overridden providers; bottom nav < 600 dp, rail ≥ 600 dp |
 | Utils | unit | shop name, URL validation, formatters, backup file name |
 | `AlarmController` | unit | ring/stop, auto-stop, replace, notification failure, test alarm |
 | `AlarmScreen` | widget | Stop silences, cancels the notification once, pops back |
 
 What is not tested automatically: `WebViewPageFetcher` (needs a real platform
-WebView), `SchedulerService` and the WorkManager worker, notification
+WebView), `SchedulerService` and the Android alarm callback, notification
 delivery and taps, the actual loudness/looping of the Android alarm channel
-and of `AudioAlarmSound` (device test — use Settings → Test alarm), `BackupService` ZIP handling (the underlying
-`exportAll`/`importAll` is tested), DST behaviour, the screens beyond the
+and of `AudioAlarmSound` (device test — use Settings → Test alarm), DST behaviour, the screens beyond the
 shell smoke test, and the live shop pages (fixtures only; CI never contacts
 Galaxus or Brack).

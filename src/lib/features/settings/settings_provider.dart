@@ -16,6 +16,12 @@ final notificationPermissionProvider =
       (ref) => ref.watch(notificationServiceProvider).permission(),
     );
 
+/// Android exact alarms ("Alarms & reminders"); always true elsewhere.
+/// Re-read with `ref.invalidate` after returning from the system page.
+final exactAlarmPermissionProvider = FutureProvider.autoDispose<bool>(
+  (ref) => ref.watch(notificationServiceProvider).canScheduleExactAlarms(),
+);
+
 // ── Write side ──────────────────────────────────────────────────────────────
 
 class SettingsActions {
@@ -31,6 +37,18 @@ class SettingsActions {
   Future<void> requestFullScreenAlarmPermission() => _ref
       .read(notificationServiceProvider)
       .requestFullScreenAlarmPermission();
+
+  /// Opens the system page; the result is only known when the user comes
+  /// back, so the scheduler re-plans on the next resume (catch-up) and the
+  /// UI re-reads the state via [refreshExactAlarmPermission].
+  Future<void> requestExactAlarmPermission() => _ref
+      .read(notificationServiceProvider)
+      .requestExactAlarmPermission();
+
+  Future<void> refreshExactAlarmPermission() async {
+    _ref.invalidate(exactAlarmPermissionProvider);
+    await _ref.read(schedulerServiceProvider).reschedule();
+  }
 
   Future<void> requestNotificationPermission() async {
     await _ref.read(notificationServiceProvider).requestPermission();

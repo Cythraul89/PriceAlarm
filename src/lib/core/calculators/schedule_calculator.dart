@@ -1,4 +1,5 @@
 import '../models/item.dart';
+import '../models/offer.dart';
 
 /// Daily schedule maths (REQUIREMENTS 5.1). Pure: `now` is always passed in.
 ///
@@ -27,6 +28,14 @@ abstract final class ScheduleCalculator {
   static bool isDue(Item item, DateTime now) {
     if (!item.enabled) return false;
     final reference = item.lastRunAt ?? item.createdAt;
+    return latestDue(item.checkTime, now).isAfter(reference);
+  }
+
+  /// An offer is due when it was not checked since the item's latest due
+  /// instant — the unit of catch-up once a run may skip offers.
+  static bool isOfferDue(Item item, Offer offer, DateTime now) {
+    if (!item.enabled) return false;
+    final reference = offer.lastCheckedAt ?? item.createdAt;
     return latestDue(item.checkTime, now).isAfter(reference);
   }
 

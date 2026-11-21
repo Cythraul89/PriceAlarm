@@ -127,6 +127,38 @@ class NotificationService implements AlarmNotifier {
     return null;
   }
 
+  /// Whether exact alarms may be scheduled (Android 12+ "Alarms &
+  /// reminders"; denied by default for new installs on Android 14+).
+  /// `true` on other platforms, where the question does not arise.
+  Future<bool> canScheduleExactAlarms() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      return await _plugin
+              .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin
+              >()
+              ?.canScheduleExactNotifications() ??
+          false;
+    } catch (e, st) {
+      log.error('Exact alarm permission check failed', e, st);
+      return false;
+    }
+  }
+
+  /// Opens the system "Alarms & reminders" page for this app.
+  Future<void> requestExactAlarmPermission() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.requestExactAlarmsPermission();
+    } catch (e, st) {
+      log.error('Exact alarm permission request failed', e, st);
+    }
+  }
+
   /// Android 14+ may revoke full-screen intents for apps that are not
   /// alarm clocks; this opens the system page where the user can allow it.
   Future<void> requestFullScreenAlarmPermission() async {

@@ -159,13 +159,15 @@ void main() {
     late LogService log;
     late Directory tmp;
     late _FakeNotifier notifier;
-    final now = DateTime.utc(2026, 11, 21, 8);
+    // Local wall clock, as in production; the item checks daily at 08:00.
+    late DateTime now;
 
     setUp(() async {
       db = AppDatabase.forTesting(NativeDatabase.memory());
       tmp = await Directory.systemTemp.createTemp('price_alarm_test');
       log = LogService(File('${tmp.path}/test.log'));
       notifier = _FakeNotifier();
+      now = DateTime(2026, 11, 21, 8, 5);
     });
 
     tearDown(() async {
@@ -193,11 +195,16 @@ void main() {
               ),
             ],
           ),
-          now: now.subtract(const Duration(days: 1)),
+          now: now.subtract(const Duration(days: 2)).toUtc(),
         );
 
-    Future<void> run(String id, _FakeFetcher http, _FakeFetcher? webView,
-        {bool defer = false}) async {
+    Future<void> run(
+      String id,
+      _FakeFetcher http,
+      _FakeFetcher? webView, {
+      RunScope scope = RunScope.allOffers,
+      bool defer = false,
+    }) async {
       final item = (await db.itemsDao.findById(id))!;
       await runPriceChecks(
         db: db,
@@ -207,11 +214,30 @@ void main() {
         notifier: notifier,
         log: log,
         clock: () => now,
-        deferWebViewItems: defer,
+        scope: scope,
+        deferWebViewOffers: defer,
       );
     }
 
-    test('records history, offer state and fires the alarm once', () async {
+    /// Galaxus learned the WebView method in an earlier foreground run.
+    Future<void> galaxusSeenViaWebViewYesterday(String id) async {
+      final galaxus = (await db.offersDao.getByItem(
+        id,
+      )).firstWhere((o) => o.shopName == 'Galaxus');
+      await db.offersDao.recordCheck(
+        galaxus.id,
+        CheckOutcome(
+          status: CheckStatus.ok,
+          method: FetchMethod.webview,
+          price: Decimal.parse('2276.00'),
+          currency: 'CHF',
+        ),
+        checkedAt: now.subtract(const Duration(days: 1)).toUtc(),
+        rememberMethod: true,
+      );
+    }
+
+    test('records history and offer state, rings once per daily cycle', () async {
       final id = await createItem();
       final http = _FakeFetcher({
         _brack: PageFetched(_product('2209.00')),
@@ -225,42 +251,87 @@ void main() {
       expect(item?.alarmActive, isTrue);
       // Drift returns local DateTimes; compare the instant.
       expect(item?.lastRunAt?.isAtSameMomentAs(now), isTrue);
+      expect(item?.lastAlarmAt?.isAtSameMomentAs(now), isTrue);
       expect(notifier.alarms.single.shopName, 'Galaxus');
       expect(notifier.alarms.single.price, Decimal.parse('2149.00'));
-
-      final offers = await db.offersDao.getByItem(id);
-      final galaxus = offers.firstWhere((o) => o.shopName == 'Galaxus');
+      final galaxus = (await db.offersDao.getByItem(
+        id,
+      )).firstWhere((o) => o.shopName == 'Galaxus');
       expect(galaxus.resolvedMethod, FetchMethod.webview);
-      final history = await db.priceChecksDao.watchByItem(id, limit: 10).first;
-      expect(history, hasLength(2));
+      expect(
+        await db.priceChecksDao.watchByItem(id, limit: 10).first,
+        hasLength(2),
+      );
 
-      // Second run, still below target: no second notification.
+      // Same cycle ("Check now" an hour later): no second ring.
+      now = now.add(const Duration(hours: 1));
       await run(id, http, webView);
       expect(notifier.alarms, hasLength(1));
+
+      // Next day's scheduled run, price still below target: rings again.
+      now = DateTime(2026, 11, 22, 8, 1);
+      await run(id, http, webView, scope: RunScope.dueOffers);
+      expect(notifier.alarms, hasLength(2));
     });
 
-    test('defers items that need a WebView in background mode', () async {
-      final id = await createItem();
-      final galaxus = (await db.offersDao.getByItem(id))
-          .firstWhere((o) => o.shopName == 'Galaxus');
-      // Simulate an earlier foreground run that learned the WebView method.
-      await db.offersDao.recordCheck(
-        galaxus.id,
-        CheckOutcome(
-          status: CheckStatus.ok,
-          method: FetchMethod.webview,
-          price: Decimal.parse('2149.00'),
-          currency: 'CHF',
-        ),
-        checkedAt: now,
-        rememberMethod: true,
-      );
+    test('Android background run: checks the HTTP offer and rings, leaves '
+        'the WebView offer due', () async {
+      final id = await createItem(target: '2300');
+      await galaxusSeenViaWebViewYesterday(id);
       final http = _FakeFetcher({_brack: PageFetched(_product('2209.00'))});
 
-      await run(id, http, null, defer: true);
+      await run(id, http, null, scope: RunScope.dueOffers, defer: true);
+
+      expect(http.calls, [_brack]);
+      expect(notifier.alarms.single.shopName, 'Brack');
+      final item = await db.itemsDao.findById(id);
+      // Not a complete run: the foreground catch-up still checks Galaxus.
+      expect(item?.lastRunAt, isNull);
+      expect(item?.lastAlarmAt?.isAtSameMomentAs(now), isTrue);
+    });
+
+    test('foreground catch-up then checks only the skipped WebView offer and '
+        'does not ring twice in the cycle', () async {
+      final id = await createItem(target: '2300');
+      await galaxusSeenViaWebViewYesterday(id);
+      final http = _FakeFetcher({_brack: PageFetched(_product('2209.00'))});
+      await run(id, http, null, scope: RunScope.dueOffers, defer: true);
+
+      now = now.add(const Duration(minutes: 30)); // user opens the app
+      final webView = _FakeFetcher({_galaxus: PageFetched(_product('2276.00'))});
+      await run(id, http, webView, scope: RunScope.dueOffers);
+
+      expect(http.calls, [_brack]); // Brack was not fetched again
+      expect(webView.calls, [_galaxus]);
+      expect(notifier.alarms, hasLength(1));
+      final item = await db.itemsDao.findById(id);
+      expect(item?.lastRunAt?.isAtSameMomentAs(now), isTrue);
+    });
+
+    test('a background run with only WebView offers due changes nothing', () async {
+      final id = await createItem();
+      await galaxusSeenViaWebViewYesterday(id);
+      // Brack was already checked in this cycle.
+      final brack = (await db.offersDao.getByItem(
+        id,
+      )).firstWhere((o) => o.shopName == 'Brack');
+      await db.offersDao.recordCheck(
+        brack.id,
+        CheckOutcome(
+          status: CheckStatus.ok,
+          method: FetchMethod.http,
+          price: Decimal.parse('2209.00'),
+          currency: 'CHF',
+        ),
+        checkedAt: now.toUtc(),
+        rememberMethod: true,
+      );
+      final http = _FakeFetcher({});
+
+      await run(id, http, null, scope: RunScope.dueOffers, defer: true);
 
       expect(http.calls, isEmpty);
-      // Not recorded as run, so the foreground catch-up still picks it up.
+      expect(notifier.alarms, isEmpty);
       expect((await db.itemsDao.findById(id))?.lastRunAt, isNull);
     });
   });

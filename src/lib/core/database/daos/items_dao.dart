@@ -63,6 +63,10 @@ class ItemsDao extends DatabaseAccessor<AppDatabase> with _$ItemsDaoMixin {
               alarmActive: targetChanged
                   ? const Value(false)
                   : const Value.absent(),
+              // A new target may ring again in the current cycle.
+              lastAlarmAt: targetChanged
+                  ? const Value(null)
+                  : const Value.absent(),
             ),
           );
         }
@@ -126,12 +130,21 @@ class ItemsDao extends DatabaseAccessor<AppDatabase> with _$ItemsDaoMixin {
       );
 
   /// Targeted write of the run outcome — never a whole-row save.
+  /// [lastRunAt] is only written for a complete run, [lastAlarmAt] only
+  /// when the alarm rang.
   Future<void> recordRun(
     String id, {
     required bool alarmActive,
-    required DateTime lastRunAt,
+    DateTime? lastRunAt,
+    DateTime? lastAlarmAt,
   }) => (update(items)..where((t) => t.id.equals(id))).write(
-    ItemsCompanion(alarmActive: Value(alarmActive), lastRunAt: Value(lastRunAt)),
+    ItemsCompanion(
+      alarmActive: Value(alarmActive),
+      lastRunAt: lastRunAt == null ? const Value.absent() : Value(lastRunAt),
+      lastAlarmAt: lastAlarmAt == null
+          ? const Value.absent()
+          : Value(lastAlarmAt),
+    ),
   );
 
   Future<int> deleteById(String id) =>
@@ -148,4 +161,5 @@ Item _itemFromRow(ItemRow row) => Item(
   alarmActive: row.alarmActive,
   lastRunAt: row.lastRunAt,
   createdAt: row.createdAt,
+  lastAlarmAt: row.lastAlarmAt,
 );

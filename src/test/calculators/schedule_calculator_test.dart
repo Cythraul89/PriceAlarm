@@ -1,7 +1,9 @@
 import 'package:decimal/decimal.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:price_alarm/core/calculators/schedule_calculator.dart';
+import 'package:price_alarm/core/models/enums.dart';
 import 'package:price_alarm/core/models/item.dart';
+import 'package:price_alarm/core/models/offer.dart';
 
 Item _item({
   String id = 'i1',
@@ -92,6 +94,61 @@ void main() {
     test('a disabled item is never due', () {
       final item = _item(enabled: false, lastRunAt: DateTime(2026, 1, 1));
       expect(ScheduleCalculator.isDue(item, afterCheck), isFalse);
+    });
+  });
+
+  group('ScheduleCalculator.isOfferDue', () {
+    Offer offer({DateTime? lastCheckedAt}) => Offer(
+      id: 'o1',
+      itemId: 'i1',
+      url: 'https://www.brack.ch/x',
+      shopName: 'Brack',
+      fetchMode: FetchMode.auto,
+      lastCheckedAt: lastCheckedAt,
+    );
+
+    test('due when not checked since the latest due instant', () {
+      final item = _item();
+      final now = DateTime(2026, 11, 21, 9);
+      expect(
+        ScheduleCalculator.isOfferDue(
+          item,
+          offer(lastCheckedAt: DateTime(2026, 11, 20, 8, 1)),
+          now,
+        ),
+        isTrue,
+      );
+      expect(
+        ScheduleCalculator.isOfferDue(
+          item,
+          offer(lastCheckedAt: DateTime(2026, 11, 21, 8, 1)),
+          now,
+        ),
+        isFalse,
+      );
+    });
+
+    test('a never-checked offer counts from the item creation', () {
+      final item = _item(createdAt: DateTime(2026, 11, 21, 10));
+      expect(
+        ScheduleCalculator.isOfferDue(item, offer(), DateTime(2026, 11, 21, 11)),
+        isFalse,
+      );
+      expect(
+        ScheduleCalculator.isOfferDue(item, offer(), DateTime(2026, 11, 22, 8)),
+        isTrue,
+      );
+    });
+
+    test('offers of a disabled item are never due', () {
+      expect(
+        ScheduleCalculator.isOfferDue(
+          _item(enabled: false),
+          offer(),
+          afterCheck.add(const Duration(days: 3)),
+        ),
+        isFalse,
+      );
     });
   });
 

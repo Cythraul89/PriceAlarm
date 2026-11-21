@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/widgets/error_view.dart';
+import '../settings/settings_provider.dart';
 import 'items_provider.dart';
 import 'widgets/item_card.dart';
 
@@ -21,6 +24,9 @@ class _ItemsScreenState extends ConsumerState<ItemsScreen> {
   @override
   Widget build(BuildContext context) {
     final overviews = ref.watch(itemOverviewsProvider);
+    final exactAllowed = Platform.isAndroid
+        ? ref.watch(exactAlarmPermissionProvider).valueOrNull ?? true
+        : true;
     return Scaffold(
       appBar: AppBar(
         title: const Text('PriceAlarm'),
@@ -46,7 +52,20 @@ class _ItemsScreenState extends ConsumerState<ItemsScreen> {
         onPressed: () => context.go('/items/new'),
         child: const Icon(Icons.add),
       ),
-      body: overviews.when(
+      body: Column(
+        children: [
+          if (!exactAllowed) const _ExactAlarmBanner(),
+          Expanded(child: _buildList(context, overviews)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildList(
+    BuildContext context,
+    AsyncValue<List<ItemOverview>> overviews,
+  ) {
+    return overviews.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => ErrorView(error: e),
         data: (list) => list.isEmpty
@@ -83,7 +102,6 @@ class _ItemsScreenState extends ConsumerState<ItemsScreen> {
                   );
                 },
               ),
-      ),
     );
   }
 
@@ -96,6 +114,28 @@ class _ItemsScreenState extends ConsumerState<ItemsScreen> {
       if (mounted) setState(() => _isRefreshing = false);
     }
   }
+}
+
+/// Shown on Android while exact alarms are not allowed: the daily check
+/// would then run late in Doze (REQUIREMENTS 5.1.4).
+class _ExactAlarmBanner extends ConsumerWidget {
+  const _ExactAlarmBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => MaterialBanner(
+    leading: const Icon(Icons.alarm_off),
+    content: const Text(
+      'Checks may run late while the phone is idle. Allow exact alarms so '
+      'they run on time, like an alarm clock.',
+    ),
+    actions: [
+      TextButton(
+        onPressed: () =>
+            ref.read(settingsActionsProvider).requestExactAlarmPermission(),
+        child: const Text('Allow'),
+      ),
+    ],
+  );
 }
 
 class _EmptyState extends StatelessWidget {

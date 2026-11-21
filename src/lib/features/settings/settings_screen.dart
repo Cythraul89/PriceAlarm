@@ -15,6 +15,7 @@ class SettingsScreen extends ConsumerWidget {
     final theme = Theme.of(context);
     final themeMode = ref.watch(themeModeProvider).valueOrNull;
     final permission = ref.watch(notificationPermissionProvider);
+    final exactAlarms = ref.watch(exactAlarmPermissionProvider);
 
     Widget section(String title) => Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
@@ -71,6 +72,29 @@ class SettingsScreen extends ConsumerWidget {
               },
             ),
           ),
+          if (Platform.isAndroid)
+            ListTile(
+              title: const Text('Exact check time'),
+              subtitle: const Text(
+                'Lets the daily check run on time while the phone is idle, '
+                'like an alarm clock ("Alarms & reminders")',
+              ),
+              trailing: exactAlarms.when(
+                loading: () => const SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                error: (e, _) => const Text('unknown'),
+                data: (allowed) => allowed
+                    ? const Text('Allowed ✓')
+                    : FilledButton.tonal(
+                        onPressed: () => ref
+                            .read(settingsActionsProvider)
+                            .requestExactAlarmPermission(),
+                        child: const Text('Allow'),
+                      ),
+              ),
+            ),
           if (Platform.isAndroid)
             ListTile(
               title: const Text('Allow alarm over lock screen'),

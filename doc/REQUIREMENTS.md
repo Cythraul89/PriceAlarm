@@ -39,7 +39,8 @@ Seed data for v0.1 (the first item the user will create):
 | checkTime | int | minutes since local midnight, 0–1439, default 480 (08:00) |
 | enabled | bool | default `true`; disabled items are never checked |
 | alarmActive | bool | `true` while the trigger condition holds (see 5.2) |
-| lastRunAt | DateTime? | UTC, end of the last run |
+| lastRunAt | DateTime? | UTC, end of the last run that left no offer due |
+| lastAlarmAt | DateTime? | UTC, last ring; at most one ring per daily cycle (schema 2) |
 | createdAt | DateTime | UTC |
 
 ### 3.2 Offer
@@ -140,14 +141,15 @@ responsible for checking the terms of the shops they add.
 1. Each enabled item is due once per local calendar day at its `checkTime`.
 2. **Catch-up:** whenever the app starts or returns to the foreground, every
    enabled item whose most recent due time lies after its `lastRunAt` is run
-   immediately (at most one catch-up run per item, not one per missed day).
+   immediately — only its due offers, i.e. those not checked since that due
+   time (at most one catch-up per item, not one per missed day).
 3. "Check now" on an item runs it immediately and does not change the
    schedule.
 4. Platform behaviour (stated in the UI and README — not hidden):
 
 | Platform | When the scheduled run happens |
 |---|---|
-| Android | Background task (WorkManager) scheduled for the next due time. Android may defer it (Doze, battery saver); the delay is not guaranteed. The background run uses HTTP only: an item with an offer that needs the WebView is skipped there and runs at the next app start/resume (R3). |
+| Android | Exact alarm-clock alarm (`AlarmManager.setAlarmClock`) at the due time, also with the app closed and in Doze; needs "Alarms & reminders" (exact alarms), which Android 14+ denies by default — the app shows a banner and a Settings entry. Without it, an inexact alarm that also fires in Doze but may be several minutes late. The background run checks the HTTP offers; offers that need the WebView are checked at the next app start/resume (R3). |
 | iOS | iOS gives no way to run at a fixed time. Runs happen on app open/foreground (catch-up). Background refresh is planned, not in v0.1. |
 | macOS, Windows, Linux | While the app is running: in-app timer at the due time. Otherwise on next start (catch-up). |
 
@@ -157,14 +159,16 @@ responsible for checking the terms of the shops they add.
    offers whose last check in this run is `ok` and whose currency equals the
    item currency.
 2. The condition is `bestPrice <= targetPrice`.
-3. **Edge-triggered:** an alarm notification is raised only when the
-   condition changes from false to true (`alarmActive` false → true). While it
-   stays true, no further notifications are raised.
-4. The alarm re-arms (`alarmActive := false`) when a run with at least one
-   `ok` offer has `bestPrice > targetPrice`, or when the user edits the target
-   price.
-5. A run in which no offer is `ok` leaves `alarmActive` unchanged and raises
-   no alarm. The failure is visible on the item (see 6.1); no notification in
+3. **Rings every day while reached:** the alarm rings in every daily cycle in
+   which a check finds the condition true — at most **once per cycle**,
+   whichever check of the cycle (scheduled, catch-up on app open, Check now)
+   finds it first. A cycle starts at the item's daily check time.
+4. Editing the target price clears the ring state, so the new target may ring
+   in the current cycle. `alarmActive` (the bell on the item) shows whether
+   the last check found the condition true.
+5. A run in which no offer is `ok` leaves `alarmActive` unchanged and does
+   not ring. A run that checked only some offers (Android background, WebView
+   offers deferred) may ring, but cannot clear `alarmActive`. The failure is visible on the item (see 6.1); no notification in
    v0.1.
 6. When the alarm fires, it **rings like an alarm clock** (5.3). Content:
    item name, best price with currency, shop name, target price.
@@ -251,9 +255,9 @@ in the README.
 
 | # | Risk | How it is resolved |
 |---|---|---|
-| R1 | Galaxus may block the WebView as well, or may not expose JSON-LD. | Spike: load the Galaxus URL in a headless WebView on Android and Windows and log the result. If blocked → document and keep the offer as `blocked`. |
+| R1 | Galaxus may block the WebView as well, or may not expose JSON-LD. | **Resolved 2026-11-21 (device test):** with the WebView, Galaxus delivers structured data (CHF 2'276.00, InStock); plain HTTP stays blocked (403). |
 | R2 | `flutter_inappwebview` Linux support. | **Resolved 2026-11-21:** the stable 6.1.5 line has no Linux implementation. Linux reports `webview` offers as `unsupported` (or keeps `blocked` with the reason under `auto`); stated in the README. |
-| R3 | A headless WebView inside the Android WorkManager background isolate is not proven (upstream issue #1348 reported a broken platform channel). | **Fallback implemented:** background runs use `http` only and skip items with an offer that needs the WebView; those stay due and run at the next foreground catch-up. A device test may later allow the WebView in the background. |
+| R3 | A headless WebView inside the Android background isolate is not proven (upstream issue #1348 reported a broken platform channel). | **Fallback implemented:** the background run checks an item's HTTP offers (they may ring) and leaves offers that need the WebView due; they are checked at the next foreground catch-up. A device test may later allow the WebView in the background. |
 | R4 | Shops change their markup. | Extraction relies on schema.org data, not on CSS selectors; a failure shows up as `noPrice`, never as a wrong price. |
 
 ## 10. Planned Features

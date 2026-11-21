@@ -95,6 +95,7 @@ PriceCheckService            SchedulerService
 Top-level functions
   checkOffer({url, mode, resolvedMethod, http, webView}) → CheckOutcome
   runPriceChecks({db, items, http, webView, notifier, log, clock,
-                  deferWebViewItems}) → List<ItemRunResult>
-  callbackDispatcher()   (WorkManager entry point, Android)
+                  scope: RunScope, deferWebViewOffers}) → List<ItemRunResult>
+  priceRunCallback()     (android_alarm_manager_plus entry point, Android)
+  scheduleAndroidRun(next, {exactAllowed, log})
 ```

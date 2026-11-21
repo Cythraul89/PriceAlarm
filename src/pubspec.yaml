@@ -40,9 +40,10 @@ dependencies:
   # notification channel)
   audioplayers: ^6.8.1
 
-  # Notifications / background work (background: Android only)
+  # Notifications / background checks (background: Android only, exact
+  # alarm-clock alarms that fire in Doze)
   flutter_local_notifications: ^23.0.3
-  workmanager: ^0.10.10
+  android_alarm_manager_plus: ^5.1.2
 
   # Local backup (export / import) and log sharing
   file_picker: ^13.4.0

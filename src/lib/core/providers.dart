@@ -77,6 +77,7 @@ final schedulerServiceProvider = Provider<SchedulerService>((ref) {
     db: ref.watch(appDatabaseProvider),
     checks: ref.watch(priceCheckServiceProvider),
     log: ref.watch(logServiceProvider),
+    exactAlarmsAllowed: ref.watch(notificationServiceProvider).canScheduleExactAlarms,
   );
   ref.onDispose(scheduler.dispose);
   return scheduler;

@@ -9,8 +9,8 @@ target. Offline-first, no account, no server.
 **Items and offers**
 - An item (e.g. "ASUS Radeon AI PRO R9700") has a target price, a daily check
   time and one or more shop offers (URLs).
-- The alarm fires when the cheapest successfully read offer is at or below the
-  target — once, when the price crosses it, not every day.
+- The alarm rings at each daily check while the cheapest successfully read
+  offer is at or below the target — at most once per day.
 - **It rings like an alarm clock**: a looping alarm sound until you press
   Stop (auto-stop after 10 minutes) and a full-screen alarm screen.
   On Android it uses your alarm-clock sound at alarm-clock volume, also with
@@ -35,21 +35,22 @@ target. Offline-first, no account, no server.
 
 | Platform | Artifact | Scheduled check | Alarm | WebView fetch | Note |
 |---|---|---|---|---|---|
-| Android | `.apk` (debug + release) | background (WorkManager), may run minutes late | alarm-clock sound and volume, also with the app closed, full-screen over the lock screen | foreground only (see below) | release is debug-key-signed unless signing secrets are set |
+| Android | `.apk` (debug + release) | exact alarm at the check time, also when idle/closed (needs "Alarms & reminders", asked in the app) | alarm-clock sound and volume, also with the app closed, full-screen over the lock screen | foreground only (see below) | release is debug-key-signed unless signing secrets are set |
 | iOS | `.zip` of `Runner.app` (debug + release) | when the app is opened | loop sound while the app is open (plays with the silent switch on); media volume | yes | **unsigned** — not installable without re-signing |
 | Linux | `.deb` amd64 (debug + release) | while the app runs / at next start | loop sound while the app runs; system volume | **no** | `flutter_inappwebview` has no stable Linux implementation |
 | macOS | `.zip` of `.app` (debug + release) | while the app runs / at next start | loop sound while the app runs; system volume | yes | ad-hoc signed, not Gatekeeper-verified |
 | Windows | `.zip` (debug + release) | while the app runs / at next start | loop sound while the app runs; system volume | yes | needs the WebView2 runtime (part of current Windows 10/11) |
 
-Android background runs use plain HTTP only. An item with an offer that needs
-the WebView (e.g. Galaxus) is checked at the next app start/resume instead.
+Android background runs use plain HTTP only: an item's HTTP offers (e.g.
+Brack) are checked and can ring; offers that need the WebView (e.g. Galaxus)
+are checked at the next app start/resume.
 
 ## Known limitations
 
-- **Galaxus** rejects plain HTTP requests (HTTP 403, verified 2026-11-21).
-  Whether the WebView fallback gets through is **not yet verified**. If it
-  does not, the offer stays `blocked` and the UI says so; the app does not try
-  to evade bot protection.
+- **Galaxus** rejects plain HTTP requests (HTTP 403); the hidden WebView gets
+  the price (verified on an Android device, 2026-11-21). The app does not try
+  to evade bot protection; if a shop blocks the WebView too, the offer stays
+  `blocked` and the UI says so.
 - Automated reading of shop pages may conflict with a shop's terms of use. The
   app loads each offer once per day; checking the terms is up to the user.
 - Offers in a currency other than the item's are shown but not compared.
@@ -72,7 +73,7 @@ the WebView (e.g. Galaxus) is checked at the next app start/resume instead.
 | WebView | flutter_inappwebview (`HeadlessInAppWebView`) |
 | Notifications | flutter_local_notifications |
 | Alarm sound | audioplayers (bundled, self-generated WAV) |
-| Background (Android) | workmanager |
+| Background (Android) | android_alarm_manager_plus (exact alarm-clock alarms) |
 | Backup | archive, file_picker, share_plus |
 
 ## Getting Started

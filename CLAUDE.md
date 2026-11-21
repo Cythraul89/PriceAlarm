@@ -74,8 +74,8 @@ src/
 │   │   │   ├── http_page_fetcher.dart    Dio, honest User-Agent
 │   │   │   ├── webview_page_fetcher.dart HeadlessInAppWebView (not Linux)
 │   │   │   ├── price_check_service.dart  checkOffer(), runPriceChecks(), PriceCheckService
-│   │   │   ├── scheduler_service.dart    WorkManager (Android) / Timer + catch-up
-│   │   │   ├── background_worker.dart    WorkManager callbackDispatcher
+│   │   │   ├── scheduler_service.dart    exact alarm (Android) / Timer + catch-up
+│   │   │   ├── background_worker.dart    alarm callback priceRunCallback + scheduleAndroidRun
 │   │   │   ├── alarm_controller.dart     rings: notification + loop sound + alarm-screen event
 │   │   │   ├── alarm_sound.dart          audioplayers loop (iOS/desktop), silent on Android
 │   │   │   ├── notification_service.dart flutter_local_notifications (Android alarm channel)
@@ -139,10 +139,16 @@ Providers that **must be overridden** at startup (each throws otherwise):
   The WebView path uses the platform browser engine as-is.
 - **Structured data only** — prices come from schema.org JSON-LD or OG product
   meta tags. Never parse prices out of arbitrary page text.
-- **One run path** — the UI and the Android worker both call
+- **One run path** — the UI and the Android alarm callback both call
   `runPriceChecks()`; behaviour changes go there, not into a caller.
-- **Edge-triggered alarm** — `AlarmEvaluator` fires only on false → true; a run
-  with no `ok` offer keeps `alarmActive` unchanged.
+- **Ring once per daily cycle, every day while reached** — `AlarmEvaluator`
+  rings when the best price is at/below target and `lastAlarmAt` is before the
+  cycle start (latest due instant). A target edit clears `lastAlarmAt`. A run
+  with no `ok` offer changes nothing; a partial run (`complete: false`) may
+  ring but never clears `alarmActive`.
+- **Offers are the unit of "due"** — scheduled runs and catch-ups use
+  `RunScope.dueOffers` (offers not checked since the latest due instant);
+  `lastRunAt` is set only when no offer was skipped.
 - **Alarm rings like an alarm clock** — Android: the notification *is* the
   alarm (alarm audio usage = alarm-clock volume, system alarm sound,
   `FLAG_INSISTENT`, full-screen intent, 10-min timeout). iOS/desktop:
@@ -165,22 +171,36 @@ Providers that **must be overridden** at startup (each throws otherwise):
 
 ## Platform traps
 
-- **WorkManager: keep the default initializer.** The reference repos removed
-  `WorkManagerInitializer` via a manifest patch; workmanager 0.10.x calls
-  `WorkManager.getInstance(context)` and relies on that initializer, so the
-  patch is deliberately absent from `build.yml`. Re-check if a crash before the
-  Dart VM starts is ever observed.
-- **WorkManager: never `replace` from inside the task.** Re-enqueueing the
-  unique work `price-run` with `ExistingWorkPolicy.replace` from within the
-  running task would cancel that task. The worker uses `update`
-  (Android APPEND_OR_REPLACE); the UI isolate uses `replace`.
+- **WorkManager was too late for an alarm clock.** v0.1 used WorkManager; a
+  device log showed runs 1–14 min late in Doze (OEM battery savers can hold
+  them until the app opens). Android now uses android_alarm_manager_plus with
+  `alarmClock: true` (exact) — do not go back to WorkManager for the daily
+  check.
+- **Exact alarms need "Alarms & reminders".** `SCHEDULE_EXACT_ALARM` is denied
+  by default on Android 14+. `scheduleAndroidRun` falls back to an inexact
+  `allowWhileIdle` alarm; the items banner and Settings → "Exact check time"
+  ask for the permission; the state is re-read on resume.
+- **The alarm callback is a fresh isolate.** Call
+  `WidgetsFlutterBinding.ensureInitialized()` and
+  `DartPluginRegistrant.ensureInitialized()` first (Dart-registered plugins
+  such as path_provider_android are not registered otherwise), open the DB
+  with `openForIsolate()`, and always schedule the next alarm in `finally` —
+  a failed run must not end the chain.
+- **android_alarm_manager_plus ships no manifest entries.** Its service,
+  receivers and permissions (`RECEIVE_BOOT_COMPLETED`, `WAKE_LOCK`,
+  `SCHEDULE_EXACT_ALARM`) are patched in `build.yml`; without them alarms
+  never fire.
+- **Two DB connections.** UI isolate and alarm callback open the same file;
+  `PRAGMA busy_timeout = 5000` avoids SQLITE_BUSY, and Drift streams in the UI
+  do not see background writes until the next query (catch-up on resume
+  writes, which refreshes them).
 - **No headless WebView on Linux.** `flutter_inappwebview` 6.1.x has no Linux
   implementation; `WebViewPageFetcher.isSupportedPlatform` guards it and Linux
   reports `webview` offers as `unsupported`.
 - **No WebView in the Android background isolate (yet).** Unproven
-  (REQUIREMENTS R3, upstream issue #1348). The worker passes `webView: null`
-  and `deferWebViewItems: true`; such items stay due for the foreground
-  catch-up.
+  (REQUIREMENTS R3, upstream issue #1348). The alarm callback passes
+  `webView: null` and `deferWebViewOffers: true`: HTTP offers are checked (and
+  may ring), WebView offers stay due for the foreground catch-up.
 - **Android notification channels are immutable.** Sound, audio usage and
   importance cannot change once `price_alarm_ring_v1` exists on a device.
   Changing them needs a new channel id (`_v2`), otherwise existing installs
@@ -204,14 +224,22 @@ Providers that **must be overridden** at startup (each throws otherwise):
   see the app theme; the fix is `MaterialUiCompatibilityBridge` in
   `MaterialApp.builder` (material_ui README, step 3). No current dependency
   renders Material UI, so the bridge is not installed.
+- **Windows: flutter_inappwebview vs. MSVC 14.52 (STL1011).** The plugin
+  compiles C++/WinRT as C++17, which includes `<experimental/coroutine>`;
+  Visual Studio 18 makes that a hard error. `build.yml` adds Microsoft's
+  documented stop-gap define `_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`
+  to the plugin target only. Microsoft will remove the header — then Windows
+  breaks again unless upstream moves to C++20 coroutines (still C++17 in
+  0.7.0-beta.3). Options then: patch the plugin to `cxx_std_20` (untested),
+  pin an older Windows runner/toolset, or drop the WebView on Windows.
 - **compileSdk follows the plugins, not Flutter's default.** Flutter's
   template uses `flutter.compileSdkVersion` (36 in 3.47); plugins may require
   more via AAR metadata. CI failed at `:app:checkDebugAarMetadata` until the
   patch raised it to 37. When a plugin update raises it again, raise the
   number in `build.yml`.
-- **workmanager_android applies the Kotlin Gradle Plugin** — Flutter warns
-  that future versions will refuse to build such plugins (built-in Kotlin
-  migration). Not an error yet; watch the workmanager changelog.
+- **android_alarm_manager_plus applies the Kotlin Gradle Plugin** — Flutter
+  warns that future versions will refuse to build such plugins (built-in
+  Kotlin migration). Not an error yet; watch the plugin's changelog.
 - **sqlite3_flutter_libs is obsolete.** `sqlite3` 3.x (pulled in by drift 2.35)
   bundles SQLite through build hooks; the old package is an empty `+eol`
   release. Do not re-add it.
@@ -227,7 +255,6 @@ Providers that **must be overridden** at startup (each throws otherwise):
 |---|---|---|---|
 | `sqlite3_flutter_libs` | required | absent | obsolete with `sqlite3` 3.x (see traps) |
 | Dart SDK lower bound | `>=3.3.0` | `>=3.9.0` | current drift / go_router releases need a recent SDK |
-| WorkManager initializer patch | remove it | keep it | workmanager 0.10.x needs it (see traps) |
 | Router variable | private `_router` | public `appRouter` | `main.dart` navigates on notification taps |
 | Material import | `package:flutter/material.dart` | `package:material_ui/material_ui.dart` | Material decoupled from the framework; the old import is deprecated after Flutter 3.47 |
 
@@ -240,8 +267,10 @@ Providers that **must be overridden** at startup (each throws otherwise):
 | `test/services/price_extractor_test.dart` | JSON-LD variants, OG fallback, real Brack fixture, challenge detection |
 | `test/services/price_check_service_test.dart` | `checkOffer` escalation rules, `runPriceChecks` with fakes + in-memory DB |
 | `test/services/http_page_fetcher_test.dart` | loopback `HttpServer`: 200/403/429/404/500/refused, User-Agent |
-| `test/calculators/alarm_evaluator_test.dart` | trigger, edge vs. level, re-arm, currencies, no-ok runs |
+| `test/calculators/alarm_evaluator_test.dart` | ring at/below target, once per cycle, new cycle, partial runs, currencies, no-ok runs |
 | `test/calculators/schedule_calculator_test.dart` | due/next-due, catch-up, creation time, disabled |
+| `test/database/migration_test.dart` | real schema-1 DB (`fixtures/schema_v1_with_item.sql`) → 2; old backup JSON |
+| `test/services/backup_service_test.dart` | export → import through real ZIP/JSON bytes |
 | `test/database/daos_test.dart` | saveDraft reconciliation, recordCheck, history, retention, cascade, export/import |
 | `test/utils/utils_test.dart` | shop name, URL validation, formatters, backup file name |
 | `test/services/alarm_controller_test.dart` | ring/stop, auto-stop, replace, notification failure, test alarm |
@@ -279,6 +308,7 @@ Android `build.yml` patches: `INTERNET`, `POST_NOTIFICATIONS`,
 `compileSdk = 37` (flutter_local_notifications 23 / androidx.core 1.19 require
 it); core library desugaring (flutter_local_notifications);
 `flutter_inappwebview_android` proguard fix for AGP 9.
+Windows: STL1011 define for `flutter_inappwebview_windows` (see traps).
 Linux: GStreamer dev packages for the build, GStreamer runtime in `.deb`.
 iOS: no usage descriptions needed.
 
@@ -292,8 +322,9 @@ Release: `git tag v0.1.0 && git push origin v0.1.0`.
 2. Add it to `@DriftDatabase(tables: [...])`.
 3. Create `core/database/daos/<name>_dao.dart` — `@DriftAccessor`.
 4. Add the DAO to `@DriftDatabase(daos: [...])`.
-5. Bump `schemaVersion`, add an `onUpgrade` to the `MigrationStrategy` with an
-   `if (from < N)` block (none exists yet — schema version is 1).
+5. Bump `schemaVersion` (currently 2) and add an `if (from < N)` block to
+   `onUpgrade`; add a fixture of the previous schema and extend
+   `test/database/migration_test.dart`.
 6. Run `dart run build_runner build`, extend `test/database/daos_test.dart`.
 7. Bump `BackupService.kFormatVersion` if the export shape changes.
 
@@ -304,4 +335,4 @@ Release: `git tag v0.1.0 && git push origin v0.1.0`.
 | Site | Access | Verified behaviour (2026-11-21) |
 |---|---|---|
 | brack.ch | HTTP, honest User-Agent → 200 | JSON-LD `Product` with `offers.price`, `priceCurrency`, `availability` |
-| galaxus.ch | HTTP → 403 (Akamai) | WebView result **unverified** (REQUIREMENTS R1) |
+| galaxus.ch | HTTP → 403 (Akamai); WebView → 200 | JSON-LD price via WebView (device test: CHF 2'276.00, InStock) |

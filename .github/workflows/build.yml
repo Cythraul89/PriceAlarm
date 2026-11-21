@@ -85,7 +85,10 @@ jobs:
       # USE_FULL_SCREEN_INTENT + showWhenLocked/turnScreenOn on MainActivity:
       # the ringing alarm opens full-screen over the lock screen like an alarm
       # clock (flutter_local_notifications README, "Full-screen intent").
-      - name: Patch AndroidManifest (permissions, lock-screen alarm)
+      # android_alarm_manager_plus (exact daily check in Doze) ships no manifest
+      # entries: its service and receivers plus RECEIVE_BOOT_COMPLETED, WAKE_LOCK
+      # and SCHEDULE_EXACT_ALARM are added here (plugin README, "Usage").
+      - name: Patch AndroidManifest (permissions, lock-screen alarm, alarm manager)
         shell: python3 {0}
         run: |
           path = 'android/app/src/main/AndroidManifest.xml'
@@ -102,10 +105,37 @@ jobs:
                   1,
               )
               print('Added showWhenLocked/turnScreenOn to MainActivity')
+          alarm_pkg = 'dev.fluttercommunity.plus.androidalarmmanager'
+          if alarm_pkg not in content:
+              components = (
+                  f'        <service\n'
+                  f'            android:name="{alarm_pkg}.AlarmService"\n'
+                  f'            android:permission="android.permission.BIND_JOB_SERVICE"\n'
+                  f'            android:exported="false"/>\n'
+                  f'        <receiver\n'
+                  f'            android:name="{alarm_pkg}.AlarmBroadcastReceiver"\n'
+                  f'            android:exported="false"/>\n'
+                  f'        <receiver\n'
+                  f'            android:name="{alarm_pkg}.RebootBroadcastReceiver"\n'
+                  f'            android:enabled="false"\n'
+                  f'            android:exported="false">\n'
+                  f'            <intent-filter>\n'
+                  f'                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n'
+                  f'            </intent-filter>\n'
+                  f'        </receiver>\n'
+              )
+              if '    </application>' not in content:
+                  raise SystemExit('</application> not found — template changed?')
+              content = content.replace(
+                  '    </application>', components + '    </application>', 1)
+              print('Added android_alarm_manager_plus service and receivers')
           for perm in [
               'android.permission.INTERNET',
               'android.permission.POST_NOTIFICATIONS',
               'android.permission.USE_FULL_SCREEN_INTENT',
+              'android.permission.RECEIVE_BOOT_COMPLETED',
+              'android.permission.WAKE_LOCK',
+              'android.permission.SCHEDULE_EXACT_ALARM',
           ]:
               if perm not in content:
                   content = content.replace(
@@ -122,9 +152,6 @@ jobs:
       # seen in CI). compileSdk only selects the API to compile against; minSdk and
       # targetSdk stay Flutter's defaults. Core library desugaring is required by
       # flutter_local_notifications (any version >= 10).
-      # NOTE: the WorkManagerInitializer is deliberately NOT removed — workmanager
-      # 0.10.x calls WorkManager.getInstance() and relies on the default
-      # initializer (see CLAUDE.md, Platform traps).
       - name: Patch build.gradle.kts (compileSdk, desugaring)
         shell: python3 {0}
         run: |
@@ -448,6 +475,35 @@ jobs:
       - run: dart run build_runner build
       - name: Scaffold Windows platform
         run: flutter create --platforms=windows .
+
+      # flutter_inappwebview_windows 0.6.0 (and 0.7.0-beta.3) builds C++/WinRT
+      # code as C++17, which pulls in <experimental/coroutine>. MSVC 14.52
+      # (Visual Studio 18 on windows-latest) turns that into error STL1011.
+      # Microsoft's documented stop-gap is the define below, applied to this
+      # plugin target only. Temporary: Microsoft will remove the header; the
+      # real fix is upstream (C++20 coroutines). See CLAUDE.md, Platform traps.
+      - name: Patch flutter_inappwebview_windows for MSVC STL1011
+        shell: python
+        run: |
+          import json, pathlib, urllib.parse, urllib.request
+          config = json.loads(pathlib.Path('.dart_tool/package_config.json').read_text())
+          pkg = next(p for p in config['packages'] if p['name'] == 'flutter_inappwebview_windows')
+          root = pathlib.Path(urllib.request.url2pathname(urllib.parse.urlparse(pkg['rootUri']).path))
+          cmake = root / 'windows' / 'CMakeLists.txt'
+          text = cmake.read_text()
+          define = '_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS'
+          anchor = 'target_compile_features(${TARGET} PUBLIC cxx_std_17)'
+          if define in text:
+              print(f'{cmake}: already patched')
+          elif anchor not in text:
+              print(f'{cmake}: no C++17 anchor (fixed upstream?) — remove this step')
+          else:
+              cmake.write_text(text.replace(
+                  anchor,
+                  anchor + f'\n  target_compile_definitions(${{TARGET}} PRIVATE {define})',
+                  1))
+              print(f'{cmake}: added {define}')
+
       - name: Build Windows (${{ matrix.mode }}) and zip
         run: |
           flutter build windows --${{ matrix.mode }} `
