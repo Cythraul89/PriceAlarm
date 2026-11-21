@@ -204,6 +204,14 @@ Providers that **must be overridden** at startup (each throws otherwise):
   see the app theme; the fix is `MaterialUiCompatibilityBridge` in
   `MaterialApp.builder` (material_ui README, step 3). No current dependency
   renders Material UI, so the bridge is not installed.
+- **compileSdk follows the plugins, not Flutter's default.** Flutter's
+  template uses `flutter.compileSdkVersion` (36 in 3.47); plugins may require
+  more via AAR metadata. CI failed at `:app:checkDebugAarMetadata` until the
+  patch raised it to 37. When a plugin update raises it again, raise the
+  number in `build.yml`.
+- **workmanager_android applies the Kotlin Gradle Plugin** — Flutter warns
+  that future versions will refuse to build such plugins (built-in Kotlin
+  migration). Not an error yet; watch the workmanager changelog.
 - **sqlite3_flutter_libs is obsolete.** `sqlite3` 3.x (pulled in by drift 2.35)
   bundles SQLite through build hooks; the old package is an empty `+eol`
   release. Do not re-add it.
@@ -268,7 +276,8 @@ Three workflows; `build.yml` is the only file containing build steps.
 
 Android `build.yml` patches: `INTERNET`, `POST_NOTIFICATIONS`,
 `USE_FULL_SCREEN_INTENT`; `showWhenLocked`/`turnScreenOn` on `MainActivity`;
-`compileSdk = 36`; core library desugaring (flutter_local_notifications);
+`compileSdk = 37` (flutter_local_notifications 23 / androidx.core 1.19 require
+it); core library desugaring (flutter_local_notifications);
 `flutter_inappwebview_android` proguard fix for AGP 9.
 Linux: GStreamer dev packages for the build, GStreamer runtime in `.deb`.
 iOS: no usage descriptions needed.
