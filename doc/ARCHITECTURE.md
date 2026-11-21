@@ -6,7 +6,7 @@ Status: v0.1 implemented · Last updated: 2026-11-21
 
 | Concern | Library | Note |
 |---|---|---|
-| UI | Flutter, Material 3 | indigo seed, light + dark, `ThemeMode` from settings |
+| UI | Flutter, Material 3 via `material_ui` | indigo seed, light + dark, `ThemeMode` from settings; `package:flutter/material.dart` is deprecated after Flutter 3.47 |
 | State | `flutter_riverpod` 2 | manual providers, no codegen |
 | Navigation | `go_router` | `StatefulShellRoute.indexedStack` |
 | Persistence | `drift` (+ `sqlite3` 3.x) + `path_provider` | `sqlite3` 3.x bundles SQLite via build hooks; `sqlite3_flutter_libs` is obsolete and not used |

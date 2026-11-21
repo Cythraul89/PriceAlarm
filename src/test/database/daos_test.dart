@@ -1,6 +1,6 @@
 import 'package:decimal/decimal.dart';
 import 'package:drift/native.dart';
-import 'package:flutter/material.dart' show ThemeMode;
+import 'package:material_ui/material_ui.dart' show ThemeMode;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:price_alarm/core/database/app_database.dart';
 import 'package:price_alarm/core/models/check_outcome.dart';

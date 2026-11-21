@@ -62,7 +62,7 @@ the WebView (e.g. Galaxus) is checked at the next app start/resume instead.
 
 | Concern | Library |
 |---|---|
-| UI | Flutter, Material 3 |
+| UI | Flutter, Material 3 (`material_ui` package) |
 | State | flutter_riverpod 2 (manual providers) |
 | Navigation | go_router (`StatefulShellRoute.indexedStack`) |
 | Database | drift (+ sqlite3 3.x) |

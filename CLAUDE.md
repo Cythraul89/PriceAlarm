@@ -156,6 +156,11 @@ Providers that **must be overridden** at startup (each throws otherwise):
   renaming one is a migration.
 - **Drift DateTimes come back local** — compare instants with
   `isAtSameMomentAs`, not `==` (a UTC and a local `DateTime` are never `==`).
+- **Material comes from `package:material_ui`** — never import
+  `package:flutter/material.dart` (deprecated after Flutter 3.47; CI's stable
+  channel reports every import as an info, which fails `--fatal-infos`).
+  Use `import 'package:material_ui/material_ui.dart';` — it also re-exports
+  `package:flutter/widgets.dart`.
 - **Analyzer strictness** — `flutter analyze --fatal-infos`. Never `// ignore`.
 
 ## Platform traps
@@ -190,6 +195,15 @@ Providers that **must be overridden** at startup (each throws otherwise):
 - **Linux sound needs GStreamer** — `audioplayers_linux` builds against
   `libgstreamer*-dev` (CI apt step) and the `.deb` depends on
   `gstreamer1.0-plugins-good` for WAV playback.
+- **Local SDK older than CI** — CI uses the latest stable (3.50.1 on
+  2026-11-21). A local 3.47.x does not report the `flutter/material.dart`
+  deprecation, so a green local analyze does not prove a green CI. When in
+  doubt, run the gate with the CI version.
+- **Material decoupling and third-party widgets** — `material_ui` has its own
+  `ThemeData`. A dependency that renders `flutter/material` widgets would not
+  see the app theme; the fix is `MaterialUiCompatibilityBridge` in
+  `MaterialApp.builder` (material_ui README, step 3). No current dependency
+  renders Material UI, so the bridge is not installed.
 - **sqlite3_flutter_libs is obsolete.** `sqlite3` 3.x (pulled in by drift 2.35)
   bundles SQLite through build hooks; the old package is an empty `+eol`
   release. Do not re-add it.
@@ -207,6 +221,7 @@ Providers that **must be overridden** at startup (each throws otherwise):
 | Dart SDK lower bound | `>=3.3.0` | `>=3.9.0` | current drift / go_router releases need a recent SDK |
 | WorkManager initializer patch | remove it | keep it | workmanager 0.10.x needs it (see traps) |
 | Router variable | private `_router` | public `appRouter` | `main.dart` navigates on notification taps |
+| Material import | `package:flutter/material.dart` | `package:material_ui/material_ui.dart` | Material decoupled from the framework; the old import is deprecated after Flutter 3.47 |
 
 ---
 
